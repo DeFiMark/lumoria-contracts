@@ -1,12 +1,37 @@
 {
   "name": "lumoria-contracts",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "description": "Lumoria — curated token launchpad on Uniswap V4 (LumoriaHook pool-level taxes) with modular tokenomics on BNB Chain.",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "compile": "hardhat compile",
+    "test": "hardhat test",
+    "test:only": "hardhat test --grep",
+    "coverage": "hardhat coverage",
+    "clean": "hardhat clean",
+    "node": "hardhat node",
+    "deploy:local": "hardhat run scripts/deploy-base.js --network localhost",
+    "deploy:testnet": "hardhat run scripts/deploy-base.js --network bscTestnet",
+    "deploy:bsc": "hardhat run scripts/deploy-base.js --network bsc",
+    "smoke:local": "hardhat run scripts/smoke-launch.js --network localhost",
+    "smoke:testnet": "hardhat run scripts/smoke-launch.js --network bscTestnet",
+    "verify:testnet": "hardhat run scripts/verify.js --network bscTestnet",
+    "verify:bsc": "hardhat run scripts/verify.js --network bsc"
   },
-  "keywords": [],
+  "keywords": [
+    "solidity",
+    "bsc",
+    "defi",
+    "launchpad",
+    "dex"
+  ],
   "author": "",
-  "license": "ISC"
+  "license": "ISC",
+  "devDependencies": {
+    "@nomicfoundation/hardhat-toolbox": "^5.0.0",
+    "@uniswap/v4-core": "^1.0.2",
+    "@uniswap/v4-periphery": "^1.0.3",
+    "dotenv": "^16.4.5",
+    "hardhat": "^2.22.0",
+    "solmate": "^6.8.0"
+  }
 }
