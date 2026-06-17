@@ -72,6 +72,14 @@ async function deployContract(name, args = []) {
 async function main() {
     const networkName = hre.network.name;
     const [deployer] = await hre.ethers.getSigners();
+    const chainId = Number((await hre.ethers.provider.getNetwork()).chainId);
+    // Treat chainId 56 as BSC mainnet even when the network name is
+    // "hardhat"/"localhost" — i.e. a mainnet FORK rehearsal — so the deploy
+    // exercises the REAL canonical PoolManager + periphery, not a local copy.
+    const isBscMainnet = networkName === "bsc" || chainId === 56;
+    // Chain height just before any Lumoria contract exists — the subgraph's
+    // manifest startBlock (no indexable Lumoria event can precede it).
+    const startBlock = await hre.ethers.provider.getBlockNumber();
 
     console.log(`\nDeploying Lumoria (V4) to: ${networkName}`);
     console.log(`Deployer:                  ${deployer.address}`);
@@ -83,6 +91,9 @@ async function main() {
     if (WBNB_ADDRESSES[networkName]) {
         wbnb = WBNB_ADDRESSES[networkName];
         console.log(`WBNB marker (canonical) → ${wbnb}`);
+    } else if (isBscMainnet) {
+        wbnb = WBNB_ADDRESSES.bsc;
+        console.log(`WBNB marker (canonical, fork) → ${wbnb}`);
     } else {
         console.log("Deploying MockWBNB (local network)...");
         const mock = await deployContract("MockWBNB");
@@ -113,7 +124,7 @@ async function main() {
     // ── 6. Uniswap V4 PoolManager ─────────────────────────────────
     let poolManagerAddr;
     let poolManagerDeployedByUs = false;
-    if (networkName === "bsc") {
+    if (isBscMainnet) {
         poolManagerAddr = UNISWAP_V4_BSC.poolManager;
         console.log(`\nPoolManager (canonical BSC) → ${poolManagerAddr}`);
     } else {
@@ -169,9 +180,10 @@ async function main() {
     // ── Write deployments artifact ────────────────────────────────
     const deployments = {
         network: networkName,
-        chainId: Number((await hre.ethers.provider.getNetwork()).chainId),
+        chainId,
         deployer: deployer.address,
         deployedAt: new Date().toISOString(),
+        startBlock,
         wbnb,
         feeRecipient,
         core: {
@@ -190,7 +202,7 @@ async function main() {
             hookSalt,
             // Canonical periphery for frontend integration (quoting, routing).
             // Only meaningful on bsc mainnet.
-            ...(networkName === "bsc" ? {
+            ...(isBscMainnet ? {
                 universalRouter: UNISWAP_V4_BSC.universalRouter,
                 v4Quoter: UNISWAP_V4_BSC.v4Quoter,
                 stateView: UNISWAP_V4_BSC.stateView,

@@ -25,6 +25,27 @@ const networks = {
         // fixture only) exceeds 24KB under the debug-profile build. On BSC
         // mainnet we use the canonical PoolManager, so size never matters.
         allowUnlimitedContractSize: true,
+        // Optional BSC mainnet fork — pre-deploy rehearsal against the REAL
+        // canonical Uniswap V4 PoolManager. Enabled ONLY when BSC_FORK is set,
+        // so `npm test` never forks. chainId is pinned to 56 so deploy-base.js
+        // treats the fork as mainnet (uses the canonical PoolManager + periphery
+        // instead of deploying a local PoolManager). Usage:
+        //   BSC_FORK=1 npx hardhat node          # start a persistent forked node
+        //   npm run deploy:local                 # deploy onto the fork
+        //   npm run smoke:local                  # launch + buy on the fork
+        // Set BSC_RPC to an archive-capable endpoint; optionally pin a block
+        // with BSC_FORK_BLOCK for reproducibility.
+        ...(process.env.BSC_FORK
+            ? {
+                  chainId: 56,
+                  forking: {
+                      url: BSC_RPC,
+                      ...(process.env.BSC_FORK_BLOCK
+                          ? { blockNumber: Number(process.env.BSC_FORK_BLOCK) }
+                          : {}),
+                  },
+              }
+            : {}),
     },
     localhost: {
         // Persistent in-process node started via `npm run node`.

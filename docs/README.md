@@ -12,6 +12,10 @@ This folder contains everything needed to understand and continue building the L
 
 4. **[TESTING.md](./TESTING.md)** — Hardhat test setup, fixture pattern, coverage table, Blocked list. **Source of truth for what's verified.**
 
+5. **[SUBGRAPH.md](./SUBGRAPH.md)** — complete contract/event/entity spec for scaffolding the subgraph (every event, dynamic-template model, gotchas, schema). **Source of truth for what to index.**
+
+See also **[`../LAUNCH.md`](../LAUNCH.md)** at the repo root — the pre-mainnet launch checklist / working todo list.
+
 ## Current Status
 
 See the "Progress" section in [ROADMAP.md](./ROADMAP.md). At a glance:
@@ -31,7 +35,8 @@ lumoria-contracts/
 │   ├── DESIGN.md            ← full system spec
 │   ├── ROADMAP.md           ← phased build plan + current status
 │   ├── FRONTEND.md          ← UI + subgraph integration notes
-│   └── TESTING.md           ← Hardhat setup + coverage + Blocked list
+│   ├── TESTING.md           ← Hardhat setup + coverage + Blocked list
+│   └── SUBGRAPH.md          ← contract/event/entity spec for the subgraph
 ├── contracts/
 │   ├── Database.sol         ← central registry (Phase 1 ✅, V4 refs in Phase 5)
 │   ├── LumoriaToken.sol     ← ERC20 master copy (Phase 1 ✅)
@@ -64,6 +69,7 @@ lumoria-contracts/
 │   └── lib/hook-miner.js    ← CREATE2 salt mining for the hook address
 ├── deployments/             ← <network>.json artifacts (hardhat/localhost gitignored)
 ├── legacy/                  ← reference-only (ExampleToken/Generator + retired V2 DEX) — not compiled
+├── LAUNCH.md                ← pre-mainnet launch checklist (the working todo list)
 ├── hardhat.config.js
 └── package.json
 ```
