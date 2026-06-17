@@ -14,6 +14,8 @@ This folder contains everything needed to understand and continue building the L
 
 5. **[SUBGRAPH.md](./SUBGRAPH.md)** — complete contract/event/entity spec for scaffolding the subgraph (every event, dynamic-template model, gotchas, schema). **Source of truth for what to index.**
 
+6. **[FRONTEND_HANDOFF.md](./FRONTEND_HANDOFF.md)** — **self-contained** single-file brief for the frontend agent (which lives in a separate repo): the full available-data inventory + the complete subgraph schema + event list inlined, plus a mock-data → real-data **drift-audit** mandate and report format. **Hand this one file — and nothing else — to the frontend team.**
+
 See also **[`../LAUNCH.md`](../LAUNCH.md)** at the repo root — the pre-mainnet launch checklist / working todo list.
 
 ## Current Status
@@ -36,7 +38,8 @@ lumoria-contracts/
 │   ├── ROADMAP.md           ← phased build plan + current status
 │   ├── FRONTEND.md          ← UI + subgraph integration notes
 │   ├── TESTING.md           ← Hardhat setup + coverage + Blocked list
-│   └── SUBGRAPH.md          ← contract/event/entity spec for the subgraph
+│   ├── SUBGRAPH.md          ← contract/event/entity spec for the subgraph
+│   └── FRONTEND_HANDOFF.md  ← frontend-agent brief: data inventory + drift audit
 ├── contracts/
 │   ├── Database.sol         ← central registry (Phase 1 ✅, V4 refs in Phase 5)
 │   ├── LumoriaToken.sol     ← ERC20 master copy (Phase 1 ✅)

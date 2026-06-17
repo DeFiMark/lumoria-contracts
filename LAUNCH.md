@@ -4,23 +4,23 @@
 
 **Legend:** ✅ done · 🔄 in progress · ⬜ todo · ⏸️ deferred (intentionally, for now) · 🚧 blocked
 
-**The long pole is the security audit** (§3). Everything else can largely run in parallel with it. There is no calendar date yet — the audit + remediation cycle sets the timeline.
+**Strategy: closed-beta-first.** Ship to mainnet **ASAP** and run a **closed beta in parallel with the security audit**. The audit is no longer a hard gate for the *beta* — but it **remains required before an open/public launch**. The beta uses real mainnet contracts with real BNB and **permanently-locked liquidity**, so treat it as a controlled-exposure launch — see the beta guardrails in §3.
 
 ```
-Critical path:
+Critical path (closed-beta-first):
   [✅ contracts + docs + tests]
         │
-        ├─ ⬜ fork rehearsal (needs archive RPC) ─┐
-        ├─ ⬜ static analysis / extra fuzzing      ├─→ ⬜ SECURITY AUDIT ──→ ⬜ remediation ──┐
-  (parallel, pre-audit prep)                       │   (gating)                                 │
-        │                                                                                       │
-  ┌─ 🔄 subgraph spec → ⬜ scaffold → ⬜ deploy ─┐                                              │
-  ├─ ⬜ frontend integration (quoting/routing)   ├─ (parallel with audit) ─────────────────────┤
-  └──────────────────────────────────────────────┘                                             │
-                                                                                                ▼
-                                                                              ⬜ mainnet deploy → ⬜ verify
-                                                                              → ⬜ smoke on mainnet → ⏸️ ownership handoff
-                                                                              → ⬜ Uniswap routing allowlist (post-audit)
+        ├─ ⬜ fork rehearsal (needs archive RPC)
+        ├─ ⬜ Slither / quick static pass
+        │        │
+        │        ▼
+        ├─ ⬜ MAINNET DEPLOY → ⬜ verify → ⬜ guarded smoke ──→ ⬜ CLOSED BETA (capped exposure)
+        │                                                            running IN PARALLEL with
+  ┌─ ✅ subgraph spec → ⬜ scaffold → ⬜ deploy ─┐                  ⬜ SECURITY AUDIT → ⬜ remediation
+  ├─ ⬜ frontend integration (quoting/routing)   ┘                          │
+  └ (hand the agents the docs; build alongside the beta)                    ▼
+                                                          ⬜ OPEN / PUBLIC LAUNCH (audit-gated)
+                                                          → ⏸️ ownership handoff → ⬜ Uniswap routing allowlist
 ```
 
 ---
@@ -49,7 +49,14 @@ Validates the deploy + a real launch/buy against the **actual canonical V4 PoolM
   ```
   Expect: deploy completes, `deployments/localhost.json` has `v4.poolManager = 0x28e2…e9df`, smoke launches + buys + registers volume against the real PoolManager.
 
-## 3. Security Audit (⬜ — GATING, the long pole)
+## 3. Security Audit + Closed-Beta Guardrails (⬜ — audit runs in PARALLEL with the beta; gates the PUBLIC launch)
+
+> **Closed-beta risk posture.** Deploying pre-audit means real BNB on unaudited code where **liquidity is permanently locked** (no recovery path if a vault/hook bug strands or misprices it) and the hook runs on 100% of swaps. Bound the blast radius:
+> - **Cap exposure** — small seed liquidity, invite-only / known participants, modest trade sizes. Assume any BNB in a beta pool could be lost.
+> - **Team-funded beta liquidity** — so the locked-liquidity risk is yours, not third parties'.
+> - **Run the cheap safety nets FIRST** — the BSC-fork rehearsal (§2) against the real PoolManager + a Slither pass. They catch integration/logic bugs for ~free before any real BNB is at stake.
+> - **Mind the admin key** — admin is a hot deployer EOA (multisig deferred, §7); a compromised key can repoint `Database` infra (hook/router/feeReceiver). For a real-money beta, consider a multisig sooner, or tightly isolate the deployer key.
+> - **Tell beta users it's unaudited.**
 
 - [ ] Engage an auditor. **Scope centerpiece: `v4/LumoriaHook.sol`** — it runs on every swap and handles up to 98% of swap flow. Include `LumoriaLiquidityVault`, `LumoriaSwapRouter`, `TaxHandler`, `Generator`, `RebateContract`, and the CREATE2 deploy/trust chain (`Create2Deployer` + `hook-miner.js`).
 - [ ] Brief the auditor with the prior-art hook exploits noted in `DESIGN.md §14` (Cork Protocol, May 2025; Bunni, Sep 2025 — both hook-logic bugs).
@@ -76,7 +83,7 @@ Validates the deploy + a real launch/buy against the **actual canonical V4 PoolM
 - [ ] Launch wizard (`Generator.generateProject` + `predictTokenAddress`), creator dashboard (TaxHandler timelocks), holder rewards, FlatCurve raise pages — per `FRONTEND.md §3`.
 - [ ] (Optional) Universal Router support — taxed identically, just no rebate/attribution.
 
-## 6. Mainnet Deploy (⬜ — after audit sign-off)
+## 6. Mainnet Deploy (⬜ — for the closed beta; audit runs in parallel)
 
 - [ ] `.env`: `DEPLOYER_PK` (funded with enough BNB for ~14 deploys + hook mining), **`FEE_RECIPIENT` explicitly set**, `BSCSCAN_API_KEY`.
 - [ ] `npm run deploy:bsc` → writes `deployments/bsc.json` (uses canonical PoolManager + periphery).
