@@ -16,6 +16,8 @@ This folder contains everything needed to understand and continue building the L
 
 6. **[FRONTEND_HANDOFF.md](./FRONTEND_HANDOFF.md)** — **self-contained** single-file brief for the frontend agent (which lives in a separate repo): the full available-data inventory + the complete subgraph schema + event list inlined, plus a mock-data → real-data **drift-audit** mandate and report format. **Hand this one file — and nothing else — to the frontend team.**
 
+7. **[CONTRACTS_DRIFT_RESOLUTION.md](./CONTRACTS_DRIFT_RESOLUTION.md)** — the authoritative **answer-back** to the frontend team's drift audit ([`CONTRACTS_SUBGRAPH_DRIFT_REPORT.md`](./CONTRACTS_SUBGRAPH_DRIFT_REPORT.md)): what was **built** (vesting / allocations / renounce), what **already existed but was mis-documented** (multi-recipient fees, the timelock, the real reward flow, …), what's **cut**, and what's **off-chain**. **Self-contained — hand this back to the frontend team.**
+
 See also **[`../LAUNCH.md`](../LAUNCH.md)** at the repo root — the pre-mainnet launch checklist / working todo list.
 
 ## Current Status
@@ -26,7 +28,8 @@ See the "Progress" section in [ROADMAP.md](./ROADMAP.md). At a glance:
 - ✅ **Phase 2** — Tax System: TaxHandler + 4 modules (Creator, Reward, Burn, Liquidity)
 - ✅ **Phase 3** — DEX Refactor: Factory, Pair, Router, RebateContract *(DEX superseded by Phase 5)*
 - ✅ **Phase 4** — Launch System: Generator, FlatCurve
-- ✅ **Phase 5** — Uniswap V4 Migration: LumoriaHook + LiquidityVault + SwapRouter on the canonical V4 PoolManager (all five phases complete; pre-mainnet audit pending)
+- ✅ **Phase 5** — Uniswap V4 Migration: LumoriaHook + LiquidityVault + SwapRouter on the canonical V4 PoolManager
+- ✅ **Phase 6** — Pre-Beta Frontend Alignment: token vesting (`VestingVault`) + custom allocations (`Generator`) + management renounce (`TaxHandler`); drift audit resolved (`CONTRACTS_DRIFT_RESOLUTION.md`). 171 tests green; pre-mainnet audit pending.
 
 ## Repo Layout
 
@@ -44,9 +47,10 @@ lumoria-contracts/
 │   ├── Database.sol         ← central registry (Phase 1 ✅, V4 refs in Phase 5)
 │   ├── LumoriaToken.sol     ← ERC20 master copy (Phase 1 ✅)
 │   ├── FeeReceiver.sol      ← platform fee collector (Phase 1 ✅)
-│   ├── TaxHandler.sol       ← orchestrator (Phase 2 ✅)
-│   ├── Generator.sol        ← single-tx launches (Phase 4 ✅)
+│   ├── TaxHandler.sol       ← orchestrator + renounce freeze (Phase 2 ✅ / Phase 6 ✅)
+│   ├── Generator.sol        ← single-tx launches + creator allocations (Phase 4 ✅ / Phase 6 ✅)
 │   ├── FlatCurve.sol        ← presale with refunds (Phase 4 ✅)
+│   ├── VestingVault.sol     ← vested creator allocations, non-revocable (Phase 6 ✅)
 │   ├── RebateContract.sol   ← buy rebates (Phase 3 ✅)
 │   ├── v4/                  ← Uniswap V4 layer (Phase 5 ✅)
 │   │   ├── LumoriaHook.sol            ← pool-level fee stack, one hook for all pools

@@ -34,8 +34,9 @@ lumoria-contracts/
 │   ├── V4Hook.test.js             ← hook fee math, bypass-proofing, exactOut rejection,
 │   │                                 liquidity-lock invariants, rebate/volume attribution
 │   ├── RebateContract.test.js     ← fund / topUp / credit / withdraw flows
-│   ├── Generator.test.js          ← BYOL launch, FlatCurve wiring, predictTokenAddress
+│   ├── Generator.test.js          ← BYOL launch, FlatCurve wiring, predictTokenAddress, creator allocations
 │   ├── FlatCurve.test.js          ← contribute / refund / launch (success + fail) / claim
+│   ├── VestingVault.test.js       ← linear+cliff schedules, release timing, generator-gated creation
 │   └── modules/
 │       ├── CreatorFeeModule.test.js
 │       ├── RewardModule.test.js   ← BNB and token modes (uses Lumoria router as external)
@@ -64,7 +65,7 @@ All state setup lives in **one place**: `test/fixtures/deploy.js`. Two reasons:
 2. **Drift protection** — if the base stack changes (e.g. a new module master copy added in Phase 3), one edit in `deploy.js` updates every test.
 
 ### `deployBase()`
-Deploys: `MockWBNB` (path-marker only), `Database`, `FeeReceiver`, all master copies (`LumoriaToken`, `TaxHandler`, all 4 modules), a **local Uniswap V4 `PoolManager`**, the **`LumoriaHook`** (via `Create2Deployer` + JS salt mining so the address carries the hook-permission bits), the **`LumoriaLiquidityVault`**, the **`LumoriaSwapRouter`**, `RebateContract` (hook authorized as creditor), `FlatCurve` master copy, and the `Generator`. Wires everything into the Database and sets the `owner` signer as the Generator stand-in so tests can call `registerToken`. Returns `{ signers, wbnb, database, feeReceiver, poolManager, hook, vault, router, rebate, generator, create2Deployer, masterCopies }`.
+Deploys: `MockWBNB` (path-marker only), `Database`, `FeeReceiver`, all master copies (`LumoriaToken`, `TaxHandler`, all 4 modules), a **local Uniswap V4 `PoolManager`**, the **`LumoriaHook`** (via `Create2Deployer` + JS salt mining so the address carries the hook-permission bits), the **`LumoriaLiquidityVault`**, the shared **`VestingVault`**, the **`LumoriaSwapRouter`**, `RebateContract` (hook authorized as creditor), `FlatCurve` master copy, and the `Generator`. Wires everything into the Database (incl. `setVestingVault`) and sets the `owner` signer as the Generator stand-in so tests can call `registerToken` (and, since `owner` is the Generator stand-in, `VestingVault.createSchedule`). Returns `{ signers, wbnb, database, feeReceiver, poolManager, hook, vault, vestingVault, router, rebate, generator, create2Deployer, masterCopies }`.
 
 ### Launching a token
 
@@ -137,7 +138,7 @@ Modules infer `taxHandler` from `msg.sender` at `__init__` — payloads don't ca
 | `Database.sol` | ✅ | ✅ | admin (incl. poolManager/hook/vault setters), registry, hook-gated volume (zero-user skip), master copies |
 | `FeeReceiver.sol` | ✅ | — | receive / receiveFee / withdraw / setRecipient |
 | `LumoriaToken.sol` | ✅ | ✅ | init, transfer, approve/transferFrom, burn, setShare forwarding, **pair-exclusion** (pair = PoolManager) |
-| `TaxHandler.sol` | ✅ | ✅ | init, fee timelock, batch module proposals, distribution math, setShare |
+| `TaxHandler.sol` | ✅ | ✅ | init, fee timelock, batch module proposals, distribution math, setShare, **renounceManagement freeze (B6)**, **vesting-vault share exclusion** |
 | `CreatorFeeModule.sol` | ✅ | ✅ | init (taxHandler from msg.sender), receiveTax forwarding, setRecipient |
 | `RewardModule.sol` | ✅ | ✅ | BNB mode + token mode (external router = LumoriaSwapRouter over V4) |
 | `BurnModule.sol` | ✅ | ✅ | config + guards + end-to-end `executeBurn` via a real V4 swap |
@@ -146,12 +147,13 @@ Modules infer `taxHandler` from `msg.sender` at `__init__` — payloads don't ca
 | `v4/LumoriaLiquidityVault.sol` | ✅ | ✅ | router-only entry, lazy pool init at implied price, locked-liquidity growth, dust refunds (implicit in module flows) |
 | `v4/LumoriaSwapRouter.sol` | ✅ | ✅ | buy/sell exactIn, amountOutMin + deadline guards, addLiquidityETH delegation, non-Lumoria rejection |
 | `RebateContract.sol` | ✅ | ✅ | fund / topUp / credit / withdraw, silent-exit, re-activation (creditor = hook) |
-| `Generator.sol` | ✅ | ✅ | BYOL flow (V4 pool init + vault lock), FlatCurve wiring, predictTokenAddress, post-launch tradability |
+| `Generator.sol` | ✅ | ✅ | BYOL flow (V4 pool init + vault lock), FlatCurve wiring, predictTokenAddress, post-launch tradability, **creator allocations (B2): immediate + vested, over-allocation revert, FlatCurve path** |
 | `FlatCurve.sol` | ✅ | ✅ | contribute / refund / launch (success + fail, V4 pool seed) / claim / withdrawOnFailure |
+| `VestingVault.sol` | ✅ | ✅ | generator-gated `createSchedule` + validations, linear+cliff vesting math, `release` (full/partial/double), permissionless poke, beneficiary index |
 
 ### Blocked — add tests once unblocked
 
-None currently. All Phase 1-5 contracts are under test (147 tests green).
+None currently. All Phase 1-5 contracts — plus the Phase-6 vesting/allocations/renounce work — are under test (**171 tests green**).
 
 ---
 

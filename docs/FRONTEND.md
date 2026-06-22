@@ -23,6 +23,7 @@ Keep in sync with `DESIGN.md` (contract spec) and `ROADMAP.md` (build status). W
    - [RebateContract](#211-rebatecontract-)
    - [Generator](#212-generator-)
    - [FlatCurve](#213-flatcurve-)
+   - [VestingVault](#214-vestingvault-)
 3. [Canonical UI Flows](#3-canonical-ui-flows)
 4. [Subgraph Entity Sketch](#4-subgraph-entity-sketch)
 5. [Open Questions / TODO](#5-open-questions--todo)
@@ -79,7 +80,7 @@ Central registry. Cheap to read; rarely changes.
 - `tokenTaxHandler(token)` → address of the per-token TaxHandler.
 - `allTokensLength()` + `allTokens(i)` → on-chain iteration. For listing, prefer the subgraph.
 - `platformFeeBps()` → current platform fee (100 = 1%).
-- `generator()`, `router()`, `poolManager()`, `hook()`, `liquidityVault()`, `wbnb()`, `feeReceiver()`, `rebateContract()` → infrastructure addresses. Cache aggressively; these change rarely. (`wbnb` is only the legacy path marker — pools are native-BNB.)
+- `generator()`, `router()`, `poolManager()`, `hook()`, `liquidityVault()`, `vestingVault()`, `wbnb()`, `feeReceiver()`, `rebateContract()` → infrastructure addresses. Cache aggressively; these change rarely. (`wbnb` is only the legacy path marker — pools are native-BNB.)
 - `userVolume(token, user)`, `tokenVolume(token)` → lifetime volume counters. Prefer the subgraph for recent / windowed volume. Note: `userVolume` only accrues for swaps routed with hookData attribution (our router); `tokenVolume` counts everything.
 
 **Key writes:**
@@ -92,7 +93,7 @@ Central registry. Cheap to read; rarely changes.
 | `VolumeRegistered(token, user, amount)` | Hook records a trade (`user = address(0)` for unattributed third-party routes) | Aggregate into `TokenDailyVolume` / `UserVolume` entities |
 | `PlatformFeeUpdated(oldFee, newFee)` | Owner changes the flat platform fee | Rare; log to `PlatformConfigChange` |
 | `ModuleMasterCopySet(moduleType, masterCopy)` | Admin registers a new module implementation | Track available module types |
-| `GeneratorUpdated`, `RouterUpdated`, `PoolManagerUpdated`, `HookUpdated`, `LiquidityVaultUpdated`, `FeeReceiverUpdated`, `RebateContractUpdated` | Admin upgrades core infra | Audit trail |
+| `GeneratorUpdated`, `RouterUpdated`, `PoolManagerUpdated`, `HookUpdated`, `LiquidityVaultUpdated`, `VestingVaultUpdated`, `FeeReceiverUpdated`, `RebateContractUpdated` | Admin upgrades core infra | Audit trail |
 | `MasterCopyUpdated(copyType, newCopy)` | Admin upgrades master copies | Audit trail |
 
 **UI surfaces:**
@@ -172,6 +173,7 @@ Per-token orchestrator. Distributes BNB tax to modules, holds timelock state, ag
 - `pendingModuleChange()` → `{ changeType, moduleType, moduleIndex, buyAllocation, sellAllocation, initPayload, effectiveTime, pending }`.
 - `pendingRebalanceLength()` + `pendingRebalance(i)` → enumerate the rebalance array of a pending proposal.
 - `totalBuyTaxReceived()`, `totalSellTaxReceived()` → analytics.
+- `managementRenounced()` → `bool` — `true` once the creator has permanently frozen this token's tax/module config (B6). Drives the Manage "Locked vs Editable" status pill.
 
 **Key writes (creator only unless noted):**
 - `proposeFeeChange(newBuy, newSell)` — instant if both decrease, else 24h timelock.
@@ -180,8 +182,11 @@ Per-token orchestrator. Distributes BNB tax to modules, holds timelock state, ag
 - `proposeModuleRemove(index, AllocationUpdate[] rebalance)` — atomic remove + rebalance.
 - `proposeModuleUpdate(AllocationUpdate[] updates)` — bulk allocation rewrites.
 - `executeModuleChange()`, `cancelModuleChange()`.
+- `renounceManagement()` — **one-way, permanent.** Freezes all fee/module changes forever (even a decrease) and cancels any pending change. Backs the Manage "Lock Token" action. After this, all propose/execute calls revert `"Renounced"`.
 - `receiveBuyTax()` / `receiveSellTax()` payable — called by the **LumoriaHook** mid-swap (permissionless deposits; depositing tax is harmless).
 - `setShare(holder, amount)` — **Token-only**.
+
+> **⚠️ R1 — the timelock is real; the UI must honor it.** Fee/module edits are **not** instant (except a fee *decrease*). The Manage dashboard must show a pending-change banner, an effective-time countdown, and a cancel-pending control driven by `pendingFeeChange()` / `pendingModuleChange()` + the `*Proposed`/`*Cancelled` events. See `CONTRACTS_DRIFT_RESOLUTION.md` §2 (R1).
 
 **Events to index:**
 | Event | Fires when | Subgraph use |
@@ -198,6 +203,7 @@ Per-token orchestrator. Distributes BNB tax to modules, holds timelock state, ag
 | `ModuleChangeProposed(changeType, moduleType, buyAlloc, sellAlloc, effectiveTime)` | Any module proposal | Same banner / notifications system |
 | `ModuleRebalanceProposed(indices[], buyAllocs[], sellAllocs[])` | Emitted alongside ModuleChangeProposed with the rebalance array — same tx | Subgraph should associate by tx hash |
 | `ModuleChangeCancelled()` | Creator cancels pending module change | Banner dismissal |
+| `ManagementRenounced(token, timestamp)` | Creator permanently freezes tax/module config (B6) | Set `Token.renounced = true`; flip the Manage status pill to "Locked / Renounced" |
 
 **UI surfaces:**
 - **Creator dashboard** (for tokens they created): propose/cancel/execute fee & module changes. Pending state displayed prominently with a countdown to `effectiveTime`.
@@ -422,7 +428,8 @@ Single-transaction project launch. Clones Token + TaxHandler + optional FlatCurv
 - **`predictTokenAddress(salt)`** → CREATE2-deterministic future token address. **Crucial for UIs:** use this to display the pending token's address in a confirmation screen and pre-cache subgraph queries before the tx lands.
 
 **Key writes:**
-- **`generateProject(name, symbol, buyFee, sellFee, modules[], launchMode, launchPayload, salt)` payable** — the single-tx launch. Caller becomes the creator (owner of fee controls, recipient of remainder tokens + unsold allocations).
+- **`generateProject(name, symbol, buyFee, sellFee, modules[], launchMode, launchPayload, allocations[], salt)` payable** — the single-tx launch. Caller becomes the creator (owner of fee controls, recipient of whatever token remains after LP/presale and allocations).
+  - **`allocations`** is `AllocationData[]` where `AllocationData { address beneficiary; uint256 amount; uint64 cliff; uint64 duration; }`. Carved from the creator's remainder: `duration == 0` → immediate transfer to `beneficiary`; `duration > 0` → locked in the VestingVault (§2.13) on a linear+cliff schedule. `sum(amount)` must be ≤ the remainder (else revert `"Gen: alloc exceeds remainder"`); max **100** allocations. Pass `[]` for none. This is the on-chain backing for the Create "carve % to Dev/Marketing/Treasury, optional lock" UI — `isLocked` is now real and enforced.
 
 **Launch modes and their payloads:**
 | Mode | Enum | Payload | msg.value |
@@ -436,6 +443,8 @@ Single-transaction project launch. Clones Token + TaxHandler + optional FlatCurv
 | `ProjectGenerated(token, taxHandler, creator, name, symbol, buyFee, sellFee, launchMode)` | Every launch | Primary token-creation event; creates the `Token` entity and links to creator |
 | `BYOLLaunched(token, platformFee, tokensForLP, bnbForLP)` | BYOL branch | LP-seeding record: what went to fees vs. the pool |
 | `FlatCurveLaunched(token, flatCurve, hardCap)` | FLAT_CURVE branch | Links the token to its raise contract; seed a `Raise` entity |
+| `AllocationMinted(token, beneficiary, amount)` | An `allocations` entry with `duration == 0` | Immediate (unlocked) allocation → a `TokenAllocation` row (locked=false) |
+| `AllocationVested(token, beneficiary, scheduleId, amount, cliff, duration)` | An `allocations` entry with `duration > 0` | Links to the VestingVault `VestingSchedule` (by `scheduleId`); drives the Portfolio vested-tokens UI |
 
 **UI surfaces:**
 - **Launch wizard (creator-facing)**:
@@ -516,6 +525,36 @@ Cloneable presale contract. Users contribute BNB within `[minContribution, maxCo
 **⚠️ Stranded tokens on failure**: if the raise fails, the `tokensForPresale + tokensForLP` allocation stays in the FlatCurve contract (no recovery path in the MVP). Document in the creator flow: "a failed raise burns the allocated supply effectively." Phase 5 could add a creator-recovery function.
 
 **⚠️ BNB dust from Router refunds**: FlatCurve has a `receive()` to accept BNB refunds from the Router's `addLiquidityETH`. In practice our liquidity-add uses exact ratios (first mint), so no refunds fire. Any stray BNB sent directly becomes stuck — accounting uses `totalRaised`, not `address(this).balance`.
+
+---
+
+### 2.14 VestingVault 🟢
+
+Shared singleton (one deployment, `Database.vestingVault()`) custodying **vested** creator allocations created at launch (see Generator `allocations`, §2.12). Linear with optional cliff, **non-revocable** — there is no revoke/claw-back path, so a vested allocation can never be reclaimed (the same trust posture as the permanently-locked liquidity vault).
+
+**Key reads:**
+- `getSchedule(id)` → `{ token, beneficiary, total, released, start, cliff, duration }`.
+- `releasable(id)` → tokens claimable **right now** (`vested − released`).
+- `vestedAmount(id)` → total vested to date (incl. already released).
+- `getBeneficiarySchedules(beneficiary)` → `uint256[]` of that wallet's schedule ids. **This is the entry point for a wallet's vesting UI.**
+- `scheduleCount()` → total schedules ever created.
+
+**Key writes:**
+- **`release(id)` — permissionless.** Anyone can poke; tokens always go to the schedule's `beneficiary`. The Portfolio "Claim" button calls this for the connected wallet's ready schedules.
+
+**Events to index:**
+| Event | Fires when | Subgraph use |
+|---|---|---|
+| `ScheduleCreated(id, token, beneficiary, total, start, cliff, duration)` | Generator creates a vested allocation at launch | Create a `VestingSchedule` entity; link to token + beneficiary (`Holder`/`User`) |
+| `TokensReleased(id, beneficiary, amount)` | `release(id)` pays out | Append a `VestingRelease`; bump `VestingSchedule.released` |
+
+**UI surfaces:**
+- **Portfolio `vested-tokens-section`**: `getBeneficiarySchedules(wallet)` → per id show `total`, `released`, `releasable`, and a vest curve from `start`/`cliff`/`duration`. "Claim" → `release(id)`.
+- **Token page**: optionally show team/treasury vesting schedules for transparency (query `VestingSchedule` by token).
+
+**⚠️ Vesting math**: nothing unlocks before `start + cliff`; at the cliff the elapsed-since-`start` portion unlocks at once (`total · cliff / duration`), then it continues linearly; fully vested at `start + duration`. Compute `releasable` on-chain (`releasable(id)`) rather than re-deriving client-side, to stay exact.
+
+**⚠️ The vault is share-excluded**: tokens sitting in the vault accrue **no** reward reflections (every TaxHandler excludes it). A beneficiary only starts earning rewards on tokens **after** they `release` them into their own wallet. Surface this in the vesting UI so holders aren't surprised.
 
 ---
 

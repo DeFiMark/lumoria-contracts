@@ -72,7 +72,7 @@ Lumoria is a **curated token launchpad** with **modular tokenomics**, whose liqu
 | Contract | Purpose | Status |
 |----------|---------|--------|
 | `Database.sol` | Central registry for all system config, master copies, launched tokens, module registry | **DONE** |
-| `Generator.sol` | Clone factory — creates Token + TaxHandler + launch mode (BYOL or FlatCurve) | **DONE** |
+| `Generator.sol` | Clone factory — creates Token + TaxHandler + launch mode (BYOL or FlatCurve); carves optional creator allocations (immediate or vested) from the remainder | **DONE** |
 | `LumoriaToken.sol` | ERC20 master copy — clean transfer with holder tracking, no tax logic | **DONE** |
 | `FeeReceiver.sol` | Single contract collecting all platform 1% fees (trading + raise contributions) | **DONE** |
 
@@ -99,6 +99,7 @@ Lumoria is a **curated token launchpad** with **modular tokenomics**, whose liqu
 | Contract | Purpose | Status |
 |----------|---------|--------|
 | `FlatCurve.sol` | Presale-style raise: users contribute BNB within min/max, refundable (minus 1% platform fee), auto-pairs on fill | **DONE** |
+| `VestingVault.sol` | Shared singleton custodying vested creator allocations — linear+cliff, **non-revocable** (no removal path), `createSchedule` gated to the Generator, permissionless `release` | **DONE** |
 
 ### Libraries & Interfaces
 | Contract | Purpose | Status |
@@ -107,7 +108,7 @@ Lumoria is a **curated token launchpad** with **modular tokenomics**, whose liqu
 | `ReentrancyGuard.sol` | Reentrancy protection | **EXISTS** |
 | `TransferHelper.sol` | Safe ERC20 transfers | **EXISTS** |
 | `EnumerableSet.sol` | Set data structures (retained for future use; not currently imported) | **EXISTS** |
-| All interfaces (`I*.sol`) | Interface definitions | **DONE** (IERC20, IDatabase, ILumoriaToken, ITaxHandler, IModule, IFeeReceiver, IRebate, IFlatCurve, IGenerator, ILumoriaRouter, ILumoriaLiquidityVault) |
+| All interfaces (`I*.sol`) | Interface definitions | **DONE** (IERC20, IDatabase, ILumoriaToken, ITaxHandler, IModule, IFeeReceiver, IRebate, IFlatCurve, IGenerator, ILumoriaRouter, ILumoriaLiquidityVault, IVestingVault) |
 
 ---
 
@@ -186,6 +187,7 @@ address public router;          // LumoriaSwapRouter (V4)
 address public poolManager;     // canonical Uniswap V4 PoolManager
 address public hook;            // LumoriaHook (one instance, all pools)
 address public liquidityVault;  // LumoriaLiquidityVault (sole LP owner)
+address public vestingVault;    // VestingVault (shared; custodies vested allocations)
 address public wbnb;            // legacy path marker only — pools are native-BNB
 address public feeReceiver;
 address public rebateContract;
@@ -529,6 +531,14 @@ proposeModuleRemove(
 ```solidity
 function setShare(address holder, uint256 amount) external {
     require(msg.sender == token, "only token");
+
+    // VestingVault is excluded from share tracking (cached from
+    // Database.vestingVault() at init): tokens it custodies are locked for a
+    // beneficiary who hasn't claimed yet, so the vault must not accrue
+    // reflections it could never forward. Same rationale the token uses to
+    // exclude the PoolManager.
+    if (_vestingVault != address(0) && holder == _vestingVault) return;
+
     uint256 oldShare = shares[holder];
     totalShares = totalShares - oldShare + amount;
     shares[holder] = amount;
@@ -544,6 +554,8 @@ function setShare(address holder, uint256 amount) external {
 }
 ```
 
+> **Two excluded addresses, two layers.** The **PoolManager** is excluded inside `LumoriaToken._transferFrom` (it never calls `setShare` for the pair). The **VestingVault** is excluded here in `TaxHandler.setShare` — chosen deliberately so `LumoriaToken` stays byte-for-byte unchanged. Net effect is identical: neither address accrues reward shares.
+
 ### Events
 ```
 event BuyTaxDistributed(address indexed token, uint256 amount, address indexed buyer);
@@ -558,6 +570,7 @@ event FeeChangeCancelled();
 event ModuleChangeProposed(uint8 changeType, uint8 indexed moduleType, uint256 buyAlloc, uint256 sellAlloc, uint256 effectiveTime);
 event ModuleRebalanceProposed(uint256[] indices, uint256[] buyAllocs, uint256[] sellAllocs);
 event ModuleChangeCancelled();
+event ManagementRenounced(address indexed token, uint256 timestamp);
 ```
 
 ### Initialization
@@ -586,6 +599,7 @@ The token creator can:
 - **Remove modules**: 24-hour timelock
 - **Update module allocations**: 24-hour timelock
 - **Max fee cap**: 98% (MAX_FEE = 9800 bps)
+- **Renounce management** (`renounceManagement()`): a **one-way, permanent freeze** of the token's tax + module configuration. After it, no fee or module change can ever be proposed or executed — not even a holder-friendly fee *decrease* — and any in-flight pending change is cancelled. Sets `managementRenounced = true` and emits `ManagementRenounced(token, timestamp)`. This is the "tokenomics are frozen forever" trust signal (distinct from the LP lock, which is already permanent). The six mutators (`proposeFeeChange` / `executeFeeChange` / `proposeModuleAdd|Remove|Update` / `executeModuleChange`) all guard on `!managementRenounced`.
 
 **All changes that could negatively impact holders require 24h notice.** This gives holders time to exit if they disagree with the direction.
 
@@ -1025,6 +1039,7 @@ function generateProject(
     ModuleInitData[] calldata modules,
     LaunchMode launchMode,
     bytes calldata launchPayload,  // mode-specific config (encoded)
+    AllocationData[] calldata allocations,  // creator allocations carved from the remainder
     bytes32 salt
 ) external payable returns (address token, address taxHandler) {
     require(buyFee <= 9800 && sellFee <= 9800, "fee exceeds max");
@@ -1052,15 +1067,48 @@ function generateProject(
     // 6. Register in database
     database.registerToken(token, msg.sender, taxHandler);
     
-    // 7. Execute launch mode
+    // 7. Execute launch mode. Creator allocations (immediate or vested) are
+    //    carved from the creator's remainder inside each launch path, before
+    //    the creator receives what's left.
     if (launchMode == LaunchMode.BYOL) {
-        _launchBYOL(token, pair, launchPayload);
+        _launchBYOL(token, launchPayload, allocations);
     } else if (launchMode == LaunchMode.FLAT_CURVE) {
-        _launchFlatCurve(token, pair, launchPayload);
+        _launchFlatCurve(token, launchPayload, allocations);
     }
     
     emit ProjectGenerated(token, taxHandler, msg.sender, name, symbol, buyFee, sellFee, launchMode);
 }
+```
+
+### Creator Allocations + VestingVault
+
+`generateProject` accepts an `AllocationData[]`, applied uniformly to BYOL and FlatCurve. Each allocation is **carved from the creator's post-launch remainder** (never from the LP or presale buckets), then the creator receives whatever is left.
+
+```solidity
+struct AllocationData {
+    address beneficiary;
+    uint256 amount;
+    uint64  cliff;     // seconds after launch before vesting unlocks (≤ duration)
+    uint64  duration;  // 0 = immediate transfer; > 0 = linear vest over this many seconds
+}
+```
+
+In `_processAllocations` (called inside each launch path):
+- `duration == 0` → `safeTransfer(token, beneficiary, amount)` and `emit AllocationMinted(token, beneficiary, amount)`.
+- `duration > 0` → `safeTransfer(token, vestingVault, amount)` then `VestingVault.createSchedule(...)`, and `emit AllocationVested(token, beneficiary, scheduleId, amount, cliff, duration)`.
+- Constraints: `sum(amount) ≤ creatorRemainder` (else revert), `≤ MAX_ALLOCATIONS (100)`, non-zero amount + beneficiary.
+
+**VestingVault** (shared singleton, `Database.vestingVault()`):
+- `createSchedule(token, beneficiary, amount, cliff, duration) → id` — gated to `Database.generator()`; records a linear+cliff schedule; tokens must already have been transferred in.
+- `release(uint256 id)` — **permissionless**; sends `vested − released` to the beneficiary.
+- Views: `getSchedule(id)`, `releasable(id)`, `vestedAmount(id)`, `getBeneficiarySchedules(beneficiary)`, `scheduleCount()`.
+- **Non-revocable**: there is deliberately no revoke/claw-back path — the same trust posture as the permanently-locked liquidity vault.
+- The vault is **excluded from reward-share tracking** by every TaxHandler (see §5) so its locked balance never accrues stranded reflections.
+- Vesting math: `vested = total · (now − start) / duration` after `start+cliff`; `0` before the cliff; `total` at/after `start+duration`.
+
+```
+event ScheduleCreated(uint256 indexed id, address indexed token, address indexed beneficiary, uint256 total, uint64 start, uint64 cliff, uint64 duration);
+event TokensReleased(uint256 indexed id, address indexed beneficiary, uint256 amount);
 ```
 
 ### BYOL Launch
@@ -1111,6 +1159,8 @@ event ProjectGenerated(
     uint8 launchMode
 );
 event FlatCurveLaunched(address indexed token, address indexed flatCurve, uint256 hardCap);
+event AllocationMinted(address indexed token, address indexed beneficiary, uint256 amount);
+event AllocationVested(address indexed token, address indexed beneficiary, uint256 indexed scheduleId, uint256 amount, uint64 cliff, uint64 duration);
 ```
 
 ---
@@ -1140,6 +1190,8 @@ event FlatCurveLaunched(address indexed token, address indexed flatCurve, uint25
 **Generator**:
 - `ProjectGenerated(token, taxHandler, creator, name, symbol, buyFee, sellFee, launchMode)`
 - `FlatCurveLaunched(token, flatCurve, hardCap)`
+- `AllocationMinted(token, beneficiary, amount)` — immediate (unlocked) creator allocation
+- `AllocationVested(token, beneficiary, scheduleId, amount, cliff, duration)` — vested creator allocation (→ VestingVault schedule)
 
 **Token**:
 - `Transfer(from, to, value)`
@@ -1177,6 +1229,11 @@ event FlatCurveLaunched(address indexed token, address indexed flatCurve, uint25
 - `ModuleChangeProposed(changeType, moduleType, buyAlloc, sellAlloc, effectiveTime)`
 - `ModuleRebalanceProposed(indices, buyAllocs, sellAllocs)`
 - `ModuleChangeCancelled()`
+- `ManagementRenounced(token, timestamp)` — one-way permanent freeze of fee/module config (B6)
+
+**VestingVault** (shared singleton — vested creator allocations):
+- `ScheduleCreated(id, token, beneficiary, total, start, cliff, duration)`
+- `TokensReleased(id, beneficiary, amount)`
 
 **RewardModule**:
 - `RewardDeposited(token, amount)`

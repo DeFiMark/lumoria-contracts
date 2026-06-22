@@ -13,6 +13,7 @@ contract Database is Ownable, IDatabase {
     address public override poolManager;     // canonical Uniswap V4 PoolManager
     address public override hook;            // LumoriaHook (one instance, all pools)
     address public override liquidityVault;  // LumoriaLiquidityVault (sole LP owner)
+    address public override vestingVault;    // VestingVault (shared; custodies vested allocations)
     address public immutable override wbnb;  // legacy path marker for modules — pools are native-BNB
     address public override feeReceiver;
     address public override rebateContract;
@@ -129,6 +130,11 @@ contract Database is Ownable, IDatabase {
     function setLiquidityVault(address _liquidityVault) external onlyOwner {
         emit LiquidityVaultUpdated(liquidityVault, _liquidityVault);
         liquidityVault = _liquidityVault;
+    }
+
+    function setVestingVault(address _vestingVault) external onlyOwner {
+        emit VestingVaultUpdated(vestingVault, _vestingVault);
+        vestingVault = _vestingVault;
     }
 
     function setFeeReceiver(address _feeReceiver) external onlyOwner {

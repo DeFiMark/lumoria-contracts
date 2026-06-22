@@ -14,6 +14,7 @@ interface IDatabase {
     event PoolManagerUpdated(address indexed oldPoolManager, address indexed newPoolManager);
     event HookUpdated(address indexed oldHook, address indexed newHook);
     event LiquidityVaultUpdated(address indexed oldVault, address indexed newVault);
+    event VestingVaultUpdated(address indexed oldVault, address indexed newVault);
     event FeeReceiverUpdated(address indexed oldFeeReceiver, address indexed newFeeReceiver);
     event RebateContractUpdated(address indexed oldRebate, address indexed newRebate);
 
@@ -23,6 +24,7 @@ interface IDatabase {
     function poolManager() external view returns (address);
     function hook() external view returns (address);
     function liquidityVault() external view returns (address);
+    function vestingVault() external view returns (address);
     function wbnb() external view returns (address);
     function feeReceiver() external view returns (address);
     function rebateContract() external view returns (address);

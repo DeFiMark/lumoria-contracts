@@ -23,9 +23,10 @@ Phase 2: Tax System               ✅ DONE
 Phase 3: DEX Refactor             ✅ DONE   (superseded by Phase 5)
 Phase 4: Launch System            ✅ DONE
 Phase 5: Uniswap V4 Migration     ✅ DONE
+Phase 6: Pre-Beta Frontend Align  ✅ DONE
 ```
 
-**All five phases complete.** Phase 5 replaced the custom V2-style DEX (Factory/Pair/Router) with Uniswap V4 pools + a LumoriaHook that enforces the entire fee stack at the pool level (147 tests green; deploy + smoke validated locally). Remaining pre-mainnet work: a real **security audit** (the hook handles up to 98% of swap flow — see DESIGN.md §14), the **subgraph** (hook/vault events — see FRONTEND.md), and final frontend integration (V4Quoter quoting, Universal Router support). Deployment scripts live in `scripts/` (see [TESTING.md § Deployment](./TESTING.md#deployment-scripts)).
+**All six phases complete.** Phase 5 replaced the custom V2-style DEX (Factory/Pair/Router) with Uniswap V4 pools + a LumoriaHook that enforces the entire fee stack at the pool level. Phase 6 closed the frontend drift audit (`docs/CONTRACTS_SUBGRAPH_DRIFT_REPORT.md`) by building the three genuinely-missing capabilities — token **vesting** + custom **allocations** + management **renounce** — and documenting the many capabilities that already existed but were mis-described to the frontend (see `docs/CONTRACTS_DRIFT_RESOLUTION.md`). **171 tests green; deploy + smoke validated locally.** Remaining pre-mainnet work: a real **security audit** (the hook handles up to 98% of swap flow — see DESIGN.md §14, now also covering `VestingVault`), the **subgraph** (hook/vault/vesting events — see FRONTEND.md / SUBGRAPH.md), and final frontend integration (V4Quoter quoting, Universal Router support). Deployment scripts live in `scripts/` (see [TESTING.md § Deployment](./TESTING.md#deployment-scripts)).
 
 ### Phase 1 — Core Infrastructure ✅ COMPLETE
 Built:
@@ -139,6 +140,23 @@ On-chain `quoteBuy`/`quoteSell` views are dropped (CL math can't be replicated a
 - Pool creation impossible except via Generator→vault path; `modifyLiquidity` removal attempts revert; third-party `addLiquidity` reverts; donate reverts
 - BYOL + FlatCurve launches end-to-end on V4 pools; Burn/Liquidity/Reward module `execute*` flows green through the new router
 - Token's share-tracking exclusion holds for PoolManager (no stuck reward shares)
+
+---
+
+## Phase 6 — Pre-Beta Frontend Alignment ✅ COMPLETE
+
+Closed the frontend drift audit (`docs/CONTRACTS_SUBGRAPH_DRIFT_REPORT.md`). Built the three capabilities the UI assumed but the protocol lacked, and produced the authoritative resolution doc (`docs/CONTRACTS_DRIFT_RESOLUTION.md`) for everything else.
+
+**Built (new on-chain capability):**
+- ✅ **`VestingVault.sol`** (+ `IVestingVault`) — shared singleton, linear+cliff schedules, **non-revocable** (no revoke path), `createSchedule` gated to the Generator, permissionless `release`. Events `ScheduleCreated` / `TokensReleased`.
+- ✅ **`Generator` allocations (B2)** — `generateProject` gains an `AllocationData[]` param carved from the creator remainder (immediate `duration==0` → `AllocationMinted`; vested `duration>0` → vault + `AllocationVested`). `MAX_ALLOCATIONS = 100`; over-allocation reverts.
+- ✅ **`TaxHandler.renounceManagement()` (B6)** — one-way freeze of all fee/module changes (clears pendings); `managementRenounced()` view + `ManagementRenounced` event; guards on all six mutators.
+- ✅ **Reward-share exclusion** — `TaxHandler` caches `Database.vestingVault()` at init and skips it in `setShare`, so vested-but-unclaimed tokens never accrue stranded reflections. **`LumoriaToken` untouched.**
+- ✅ **Wiring** — `Database.vestingVault` + `setVestingVault`; deploy-base.js deploys/wires it (+ artifact); verify.js verifies it; fixture + smoke updated.
+
+**Documented-only (already shipped, was mis-described to the frontend):** multi-recipient fees via N CreatorFeeModules (B3), the 24h fee/module **timelock** (R1), the real `getUnpaidRewards` reward-claim flow (R2), module stats/burn countdowns (R3), the **continuous** reward model (B4), `minDistribution` semantics (B5), rebates vs referrals, per-user volume attribution, `predictTokenAddress`, V4Quoter/StateView quoting. **Cut:** loyalty tiers (B7), referrals (B8), PXX (B9). **Off-chain:** token metadata (B10). All resolved in `CONTRACTS_DRIFT_RESOLUTION.md`.
+
+**Verification:** 171 tests green (+24: VestingVault 11, allocations 7, renounce 6). Deploy dry-run wires the vesting vault end-to-end.
 
 ---
 

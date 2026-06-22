@@ -51,6 +51,7 @@ async function launchFlatCurve(base, overrides = {}) {
         singleCreatorFeeModule(creator.address),
         LAUNCH_MODE.FLAT_CURVE,
         payload,
+        [],
         salt,
     );
     const receipt = await tx.wait();

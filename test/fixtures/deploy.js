@@ -102,6 +102,13 @@ async function deployBase() {
     const router = await LumoriaSwapRouter.deploy(poolManagerAddr, databaseAddr);
     await database.setRouter(await router.getAddress());
 
+    // ── VestingVault (shared singleton; custodies vested allocations) ─
+    // Must be wired before any launch — TaxHandler caches it at init to
+    // exclude it from reward-share tracking.
+    const VestingVault = await ethers.getContractFactory("VestingVault");
+    const vestingVault = await VestingVault.deploy(databaseAddr);
+    await database.setVestingVault(await vestingVault.getAddress());
+
     // ── Rebate ───────────────────────────────────────────────────────
     const RebateContract = await ethers.getContractFactory("RebateContract");
     const rebate = await RebateContract.deploy(databaseAddr);
@@ -131,6 +138,7 @@ async function deployBase() {
         poolManager,
         hook,
         vault,
+        vestingVault,
         router,
         rebate,
         generator,

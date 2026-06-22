@@ -21,6 +21,7 @@ Lumoria is a **factory system**: a handful of singletons, plus per-launch contra
 | `LumoriaLiquidityVault` | singleton | `core.liquidityVault` | — | locked-liquidity / TVL |
 | `FeeReceiver` | singleton | `core.feeReceiver` | — | platform revenue |
 | `RebateContract` | singleton | `core.rebateContract` | — | rebate pools + credits |
+| `VestingVault` | singleton | `core.vestingVault` | — | vested creator allocations (schedules + releases) |
 | Uniswap V4 `PoolManager` | singleton (canonical) | `v4.poolManager` | — | **optional** — raw `Swap` for OHLC (filter by our PoolIds) |
 | `LumoriaToken` | **template** | from event | `Database.TokenRegistered` | Transfer (holders, supply) |
 | `TaxHandler` | **template** | from event | `Database.TokenRegistered` | fees, modules, tax flow, shares |
@@ -126,6 +127,8 @@ Signatures are exact (indexed fields marked). "Emitter" is the concrete contract
 | `ProjectGenerated` | `(address indexed token, address indexed taxHandler, address indexed creator, string name, string symbol, uint256 buyFee, uint256 sellFee, uint8 launchMode)` | end of every launch | fill `Token` metadata (name/symbol/launchMode); good bootstrap point (see §3) |
 | `BYOLLaunched` | `(address indexed token, uint256 platformFee, uint256 tokensForLP, uint256 bnbForLP)` | BYOL branch | record LP-seed split on `Token` |
 | `FlatCurveLaunched` | `(address indexed token, address indexed flatCurve, uint256 hardCap)` | FLAT_CURVE branch | create `Raise`, spawn `FlatCurve` template |
+| `AllocationMinted` | `(address indexed token, address indexed beneficiary, uint256 amount)` | an `allocations` entry with `duration == 0` | create a `TokenAllocation` (locked=false) → token + beneficiary |
+| `AllocationVested` | `(address indexed token, address indexed beneficiary, uint256 indexed scheduleId, uint256 amount, uint64 cliff, uint64 duration)` | an `allocations` entry with `duration > 0` | create a `TokenAllocation` (locked=true) and link to the `VestingSchedule` with `id = scheduleId` (same tx as the VestingVault `ScheduleCreated` — §5.11) |
 
 ### 5.3 LumoriaHook (singleton) — the primary trade source
 
@@ -175,8 +178,11 @@ There is **no removal event** — liquidity is permanent by construction. TVL on
 | `ModuleChangeProposed` | `(uint8 changeType, uint8 indexed moduleType, uint256 buyAlloc, uint256 sellAlloc, uint256 effectiveTime)` | any module proposal | `PendingChange` |
 | `ModuleRebalanceProposed` | `(uint256[] indices, uint256[] buyAllocs, uint256[] sellAllocs)` | **same tx** as ModuleChangeProposed | merge into the `PendingChange` by `tx.hash` |
 | `ModuleChangeCancelled` | `()` | creator cancels | clear pending |
+| `ManagementRenounced` | `(address indexed token, uint256 timestamp)` | creator permanently freezes tax/module config (B6) | set `Token.renounced = true`, `Token.renouncedAt = timestamp`; clear any open `PendingChange` |
 
 ⚠️ **Module index volatility**: REMOVE uses swap-and-pop, so `modules[]` indices shift. **Key `Module` entities by address, never by index.**
+
+⚠️ **Renounce ends the change stream**: after `ManagementRenounced`, no further `Fee*`/`Module*` proposals or executes can ever fire for that token. Treat `Token.renounced = true` as a terminal state for the Manage/timelock UI.
 
 ### 5.7 RebateContract (singleton) — per-token rebate pools
 
@@ -242,6 +248,17 @@ Spawn the matching template in the `ModuleAdded` handler (and via call-hydration
 | `RaiseFailed` | `(address indexed token, uint256 totalRaised)` | failure | `Raise.status = FAILED` |
 | `TokensClaimed` | `(address indexed contributor, uint256 tokenAmount)` | post-success claim | per-user claim record |
 
+### 5.11 VestingVault (singleton) — vested creator allocations
+
+A **singleton** (not a template), so its events index from the manifest `startBlock` — including `ScheduleCreated` fired **during a launch tx**. No same-tx ordering trap here (the trap only affects dynamically-spawned templates); the vault data source already exists, so genesis schedules are captured normally.
+
+| Event | Signature | Fires when | Handler |
+|---|---|---|---|
+| `ScheduleCreated` | `(uint256 indexed id, address indexed token, address indexed beneficiary, uint256 total, uint64 start, uint64 cliff, uint64 duration)` | Generator creates a vested allocation (`AllocationVested` is emitted in the same tx) | create `VestingSchedule` (id = `id`); link `token` + `beneficiary`; `released = 0` |
+| `TokensReleased` | `(uint256 indexed id, address indexed beneficiary, uint256 amount)` | `release(id)` pays out | append `VestingRelease`; `VestingSchedule.released += amount` |
+
+> **Releasable is time-derived, not event-derived.** `VestingSchedule.released` is exact from events, but *current claimable* depends on `block.timestamp` and can't be event-sourced. Compute it client-side (linear+cliff from `start`/`cliff`/`duration`/`total`/`released`) or read `VestingVault.releasable(id)` directly. Don't try to keep a live "releasable" field in the subgraph.
+
 ---
 
 ## 6. Recommended GraphQL Schema
@@ -262,6 +279,8 @@ type Token @entity {
     launchTx: Bytes!
     buyFee: BigInt!               # current (FeesUpdated)
     sellFee: BigInt!
+    renounced: Boolean!           # true after ManagementRenounced (B6) — config frozen forever
+    renouncedAt: BigInt           # timestamp of renounce (null until then)
     totalSupply: BigInt!
     holderCount: Int!             # EXCLUDES PoolManager + 0x0 (§1d/§10.8)
     # lifetime aggregates (from hook events)
@@ -281,6 +300,42 @@ type Token @entity {
     holders: [Holder!]! @derivedFrom(field: "token")
     feeHistory: [FeeChange!]! @derivedFrom(field: "token")
     moduleHistory: [ModuleEvent!]! @derivedFrom(field: "token")
+    allocations: [TokenAllocation!]! @derivedFrom(field: "token")
+    vestingSchedules: [VestingSchedule!]! @derivedFrom(field: "token")
+}
+
+# Creator allocations carved from the remainder at launch (Generator).
+type TokenAllocation @entity(immutable: true) {
+    id: ID!                       # tx-hash:log-index
+    token: Token!
+    beneficiary: Bytes!
+    amount: BigInt!
+    locked: Boolean!              # false = AllocationMinted (immediate), true = AllocationVested
+    schedule: VestingSchedule     # set only when locked (links by scheduleId)
+    createdAt: BigInt!
+}
+
+# A vested allocation held in the shared VestingVault (linear + cliff, non-revocable).
+type VestingSchedule @entity {
+    id: ID!                       # VestingVault schedule id (uint256, stringified)
+    token: Token!
+    beneficiary: Bytes!
+    user: User!
+    total: BigInt!
+    released: BigInt!             # exact from TokensReleased; current "releasable" is time-derived — compute client-side / read releasable(id)
+    start: BigInt!
+    cliff: BigInt!                # seconds after start
+    duration: BigInt!             # seconds
+    createdAt: BigInt!
+    releases: [VestingRelease!]! @derivedFrom(field: "schedule")
+}
+
+type VestingRelease @entity(immutable: true) {
+    id: ID!                       # tx-hash:log-index
+    schedule: VestingSchedule!
+    beneficiary: Bytes!
+    amount: BigInt!
+    timestamp: BigInt!
 }
 
 type Holder @entity {
@@ -456,7 +511,14 @@ type TokenHourData @entity {      # intraday candles — REQUIRED for the trade 
     volumeBnb: BigInt!
     txCount: BigInt!
 }
-# (add an analogous TokenMinuteData if 1m candles are needed.)
+type TokenMinuteData @entity {    # A3 — 5-min candles for the 5m/15m chart timeframes (15m is the UI default)
+    id: ID!                       # token-addr:minuteBucketUnix (5-min buckets)
+    token: Token!
+    periodStart: Int!
+    open: BigDecimal!  high: BigDecimal!  low: BigDecimal!  close: BigDecimal!
+    volumeBnb: BigInt!
+    txCount: BigInt!
+}
 # ⚠️ Candle + organic-volume handlers MUST skip Trade.isModuleFlow == true (§1e).
 
 type PlatformConfig @entity {     # singleton id="1"
@@ -464,6 +526,24 @@ type PlatformConfig @entity {     # singleton id="1"
     platformFeeBps: BigInt!
     totalFeesReceivedBnb: BigInt!
     totalTokens: Int!
+    totalVolumeBnb: BigInt!        # A1 — platform-wide cumulative trade volume (sum of VolumeRegistered)
+    creatorCount: Int!            # A2 — distinct creators ("active builders"); bump on first TokenRegistered per creator
+}
+
+type PlatformDayData @entity {    # A1 — daily platform volume, powers the landing "Trading Volume" 7d delta
+    id: ID!                       # dayStartUnix
+    date: Int!
+    volumeBnb: BigInt!
+    feesBnb: BigInt!
+    newTokens: Int!
+}
+
+type HolderDayData @entity {      # A4 — per-holder per-token end-of-day balance (portfolio value-over-time)
+    id: ID!                       # holder-addr:token-addr:dayStartUnix
+    holder: Bytes!
+    token: Token!
+    date: Int!
+    balance: BigInt!              # value-over-time = Σ(balance × TokenDayData.close) without replaying Transfers
 }
 ```
 
@@ -493,7 +573,13 @@ PlatformConfig (singleton)
 - **TVL / "liquidity locked"** → cumulative from vault `LiquidityLocked.totalLocked` (only grows).
 - **Lifetime burns / rewards / auto-LP** → accumulate module events.
 - **Platform revenue** → `FeeReceiver.FeeReceived` (total) + `TokenFeeReceived` (per token).
-- **Creator dashboard** → `FeeChange` + `ModuleEvent` + live `PendingChange`.
+- **Creator dashboard** → `FeeChange` + `ModuleEvent` + live `PendingChange`; `Token.renounced` is terminal (no more changes once true).
+- **Platform volume + 7d delta (A1)** → maintain `PlatformConfig.totalVolumeBnb` and a `PlatformDayData` bucket from `Database.VolumeRegistered` (and `FeeReceiver` for `feesBnb`).
+- **Active builders (A2)** → `PlatformConfig.creatorCount`, incremented on the *first* `TokenRegistered` for each distinct creator.
+- **5m/15m candles (A3)** → `TokenMinuteData` (5-min buckets) from the hook trade events, same as `TokenHourData` but finer; skip `isModuleFlow`.
+- **Portfolio value-over-time (A4)** → snapshot `HolderDayData.balance` on `Transfer`; value = Σ(balance × `TokenDayData.close`).
+- **Vesting (Portfolio)** → `VestingSchedule` by beneficiary (`getBeneficiarySchedules` mirror); current claimable is time-derived — compute client-side or read `releasable(id)`, don't store it.
+- **Creator allocations** → `TokenAllocation` per token (locked vs immediate); the locked ones join to `VestingSchedule` by id.
 
 ---
 
@@ -509,10 +595,11 @@ dataSources:
   - FeeReceiver     # FeeReceived, TokenFeeReceived, FeesWithdrawn, RecipientUpdated
   - RebateContract  # RebateFunded, RebateToppedUp, RebateCredited, RebateBpsUpdated,
                     #            RebateWithdrawn, RebateDeactivated, CreditorUpdated
+  - VestingVault    # ScheduleCreated, TokensReleased
   # - PoolManager   # OPTIONAL: Swap (filter by our PoolIds) for sqrtPrice OHLC
 templates:
   - LumoriaToken        # Transfer (+ Approval)
-  - TaxHandler          # fees + module + share + tax-distributed events
+  - TaxHandler          # fees + module + share + tax-distributed events + ManagementRenounced
   - CreatorFeeModule    # TaxForwarded, RecipientUpdated
   - RewardModule        # TaxReceived, DividendsDistributed, RewardClaimed, ShareUpdated
   - BurnModule          # TaxReceived, BurnExecuted, IntervalUpdated
@@ -539,6 +626,9 @@ Each `template` instance is created from the spawning event (§3) with `context`
 11. **Start blocks** — use `deployments/<net>.json`'s `startBlock` for all data sources. Templates need no start block (created dynamically).
 12. **Pending-change execute has no dedicated event** — `executeFeeChange()` emits only `FeesUpdated` (which also fires for *instant* decreases that never had a pending change). Handler: on `FeesUpdated`, if a `PendingChange(kind:"fee")` exists for the token AND its `(newBuyFee,newSellFee)` match → mark it `executed`, null the pointer, set `FeeChange.kind="timelocked"`; else `kind="instant"`. Mirror for module changes (execution arrives as `ModuleAdded`/`Removed`/`Updated`). This inference is the most bug-prone handler — get it right.
 13. **Module-recursion trades** — Burn/Liquidity modules trade through the router and re-emit `TokenPurchased`/`TokenSold`. Set `Trade.isModuleFlow = true` when the buyer/seller is a known module address (you index them all) and **exclude those trades from OHLC candles and organic volume** (§1e). They're real swaps, but counting them as organic price/volume double-counts.
+14. **Renounce is terminal** — after `TaxHandler.ManagementRenounced`, no further fee/module proposals or executes ever fire for that token. Set `Token.renounced = true`, clear any open `PendingChange`, and treat it as a final state in the Manage UI.
+15. **Vesting "releasable" is time-derived** — `VestingSchedule.released` is exact from `TokensReleased`, but *current claimable* depends on `block.timestamp`. Compute it client-side (linear+cliff) or read `VestingVault.releasable(id)`; never store a live releasable field in the subgraph.
+16. **VestingVault is a singleton, not a template** — its `ScheduleCreated` fires during the launch tx but is captured normally (the vault data source predates the launch). The same-tx trap (#1) is template-only.
 
 ---
 
@@ -571,6 +661,19 @@ The frontend/UI lead reviewed this spec against FRONTEND.md (2026-06-17). **Outc
 - Extra `Raise` fields (`contributorCount`, window/cap config) to save client reads.
 - `Module` interval / `lastExecuted` for server-rendered burn/liquidity countdowns (client read works today).
 - Readable `MasterCopyUpdated.copyType` — admin-audit legibility only; won't-fix unless a contract revision is already happening.
+
+### 2026-06-18 update — drift resolution folded in
+
+The full drift audit was resolved in **`docs/CONTRACTS_DRIFT_RESOLUTION.md`** (the answer-back for the frontend team). Net effect on the subgraph: three new on-chain capabilities were built and are now in this spec, plus four cheap aggregates were approved.
+
+**New (built) — now in the schema/manifest above:**
+- **B6 renounce** → `TaxHandler.ManagementRenounced` → `Token.renounced`/`renouncedAt` (§5.6, §10.14).
+- **B1 vesting** → `VestingVault` data source (§5.11) → `VestingSchedule` + `VestingRelease`.
+- **B2 allocations** → `Generator.AllocationMinted`/`AllocationVested` (§5.2) → `TokenAllocation` (+ link to `VestingSchedule`).
+
+**Approved aggregates (A1–A4) — now in the schema:** `PlatformConfig.totalVolumeBnb`/`creatorCount`, `PlatformDayData`, `TokenMinuteData` (5m), `HolderDayData`. Treat A1/A2 as must-haves for the landing metrics; A3/A4 are polish (derivable client-side short-term).
+
+**No-ops for the subgraph:** B3 (multi CreatorFeeModule — already covered by `Module`/`CreatorFeeForward`), B4/B5 (continuous rewards + `minDistribution` — already call-hydrated), B7/B8/B9 (cut), B10 (metadata is **off-chain** — the subgraph does not carry logo/description; the frontend joins it by token address).
 
 ---
 

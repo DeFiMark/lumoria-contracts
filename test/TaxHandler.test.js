@@ -411,4 +411,64 @@ describe("TaxHandler", function () {
             expect(await shells.taxHandler.shares(user2.address)).to.equal(ethers.parseEther("400"));
         });
     });
+
+    describe("renounceManagement (B6)", function () {
+        it("only the creator can renounce", async function () {
+            const base = await loadFixture(deployBase);
+            const shells = await launchWithSingleCreatorFee(base);
+            await expect(
+                shells.taxHandler.connect(base.signers.user1).renounceManagement(),
+            ).to.be.revertedWith("Only creator");
+        });
+
+        it("sets the flag and emits ManagementRenounced", async function () {
+            const base = await loadFixture(deployBase);
+            const shells = await launchWithSingleCreatorFee(base);
+            await expect(shells.taxHandler.connect(base.signers.creator).renounceManagement())
+                .to.emit(shells.taxHandler, "ManagementRenounced");
+            expect(await shells.taxHandler.managementRenounced()).to.equal(true);
+        });
+
+        it("cannot be renounced twice", async function () {
+            const base = await loadFixture(deployBase);
+            const shells = await launchWithSingleCreatorFee(base);
+            const th = shells.taxHandler.connect(base.signers.creator);
+            await th.renounceManagement();
+            await expect(th.renounceManagement()).to.be.revertedWith("Already renounced");
+        });
+
+        it("freezes all fee changes — even a holder-friendly decrease", async function () {
+            const base = await loadFixture(deployBase);
+            const shells = await launchWithSingleCreatorFee(base); // 5% fees
+            const th = shells.taxHandler.connect(base.signers.creator);
+            await th.renounceManagement();
+            await expect(th.proposeFeeChange(100, 100)).to.be.revertedWith("Renounced");
+            await expect(th.executeFeeChange()).to.be.revertedWith("Renounced");
+        });
+
+        it("freezes all module changes", async function () {
+            const base = await loadFixture(deployBase);
+            const shells = await launchWithSingleCreatorFee(base);
+            const th = shells.taxHandler.connect(base.signers.creator);
+            await th.renounceManagement();
+            const payload = buildCreatorFeeInitData(base.signers.user2.address);
+            await expect(th.proposeModuleAdd(MODULE_TYPE.CREATOR, 0, 0, payload, []))
+                .to.be.revertedWith("Renounced");
+            await expect(th.proposeModuleUpdate([])).to.be.revertedWith("Renounced");
+            await expect(th.proposeModuleRemove(0, [])).to.be.revertedWith("Renounced");
+            await expect(th.executeModuleChange()).to.be.revertedWith("Renounced");
+        });
+
+        it("cancels an in-flight pending change", async function () {
+            const base = await loadFixture(deployBase);
+            const shells = await launchWithSingleCreatorFee(base); // fees 500/500
+            const th = shells.taxHandler.connect(base.signers.creator);
+            // A fee INCREASE goes to the 24h timelock (pending).
+            await th.proposeFeeChange(600, 600);
+            expect((await th.pendingFeeChange()).pending).to.equal(true);
+            // Renounce wipes it.
+            await th.renounceManagement();
+            expect((await th.pendingFeeChange()).pending).to.equal(false);
+        });
+    });
 });

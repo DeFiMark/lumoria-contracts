@@ -40,6 +40,7 @@ import "./interfaces/ILumoriaToken.sol";
 import "./interfaces/ILumoriaRouter.sol";
 import "./interfaces/IFlatCurve.sol";
 import "./interfaces/IFeeReceiver.sol";
+import "./interfaces/IVestingVault.sol";
 import "./interfaces/IERC20.sol";
 import "./lib/TransferHelper.sol";
 import "./lib/ReentrancyGuard.sol";
@@ -48,6 +49,7 @@ contract Generator is IGenerator, ReentrancyGuard {
 
     uint256 public constant BPS = 10000;
     uint256 public constant TOTAL_SUPPLY = 1_000_000_000 * 10**18;
+    uint256 public constant MAX_ALLOCATIONS = 100; // gas bound on the launch allocation loop
     address public constant DEAD = 0x000000000000000000000000000000000000dEaD;
 
     IDatabase public immutable database;
@@ -75,6 +77,7 @@ contract Generator is IGenerator, ReentrancyGuard {
         ITaxHandler.ModuleInitData[] calldata modules,
         LaunchMode launchMode,
         bytes calldata launchPayload,
+        AllocationData[] calldata allocations,
         bytes32 salt
     ) external payable override nonReentrant returns (address token, address taxHandler) {
         // 1. Deterministic token clone (so the user can pre-compute the token
@@ -106,11 +109,11 @@ contract Generator is IGenerator, ReentrancyGuard {
         // 5. Register in the Database (the curated-token registry the hook checks)
         database.registerToken(token, msg.sender, taxHandler);
 
-        // 6. Launch mode
+        // 6. Launch mode (allocations are carved from the creator's remainder)
         if (launchMode == LaunchMode.BYOL) {
-            _launchBYOL(token, launchPayload);
+            _launchBYOL(token, launchPayload, allocations);
         } else {
-            _launchFlatCurve(token, launchPayload);
+            _launchFlatCurve(token, launchPayload, allocations);
         }
 
         emit ProjectGenerated(
@@ -121,7 +124,7 @@ contract Generator is IGenerator, ReentrancyGuard {
     // ─── BYOL Launch ───────────────────────────────────────────────
 
     /// @dev payload = abi.encode(uint256 tokensForLP)
-    function _launchBYOL(address token, bytes calldata payload) internal {
+    function _launchBYOL(address token, bytes calldata payload, AllocationData[] calldata allocations) internal {
         uint256 tokensForLP = abi.decode(payload, (uint256));
         require(tokensForLP > 0 && tokensForLP <= TOTAL_SUPPLY, "Gen: bad tokensForLP");
         require(msg.value > 0, "Gen: zero BNB");
@@ -133,9 +136,13 @@ contract Generator is IGenerator, ReentrancyGuard {
             IFeeReceiver(database.feeReceiver()).receiveFee{value: platformFee}(token);
         }
 
-        // Hand creator their share (remainder). Transfer is token-internal and
-        // does NOT take a tax because this is a plain transfer, not a swap.
-        uint256 tokensForCreator = TOTAL_SUPPLY - tokensForLP;
+        // Carve creator-defined allocations out of the remainder, then hand the
+        // creator whatever is left. Token transfers are tax-free (plain
+        // transfers, not swaps).
+        uint256 remainder = TOTAL_SUPPLY - tokensForLP;
+        uint256 allocated = _processAllocations(token, allocations);
+        require(allocated <= remainder, "Gen: alloc exceeds remainder");
+        uint256 tokensForCreator = remainder - allocated;
         if (tokensForCreator > 0) {
             TransferHelper.safeTransfer(token, msg.sender, tokensForCreator);
         }
@@ -168,7 +175,7 @@ contract Generator is IGenerator, ReentrancyGuard {
     ///        uint256 startTime,
     ///        uint256 endTime
     ///      )
-    function _launchFlatCurve(address token, bytes calldata payload) internal {
+    function _launchFlatCurve(address token, bytes calldata payload, AllocationData[] calldata allocations) internal {
         require(msg.value == 0, "Gen: no BNB on FLAT_CURVE");
 
         (
@@ -194,8 +201,12 @@ contract Generator is IGenerator, ReentrancyGuard {
         // Move the presale+LP allocation into the FlatCurve
         TransferHelper.safeTransfer(token, flatCurve, totalForCurve);
 
-        // Remainder to creator
-        uint256 tokensForCreator = TOTAL_SUPPLY - totalForCurve;
+        // Carve creator-defined allocations out of the remainder, then hand the
+        // creator whatever is left.
+        uint256 remainder = TOTAL_SUPPLY - totalForCurve;
+        uint256 allocated = _processAllocations(token, allocations);
+        require(allocated <= remainder, "Gen: alloc exceeds remainder");
+        uint256 tokensForCreator = remainder - allocated;
         if (tokensForCreator > 0) {
             TransferHelper.safeTransfer(token, msg.sender, tokensForCreator);
         }
@@ -206,11 +217,52 @@ contract Generator is IGenerator, ReentrancyGuard {
         emit FlatCurveLaunched(token, flatCurve, hardCap_);
     }
 
+    // ─── Allocations ───────────────────────────────────────────────
+
+    /// @dev Distributes creator-defined allocations from the Generator's token
+    ///      balance: `duration == 0` transfers straight to the beneficiary;
+    ///      otherwise the amount is moved into the VestingVault under a
+    ///      linear+cliff schedule. Returns the total tokens allocated so the
+    ///      caller can validate it against (and subtract it from) the creator's
+    ///      remainder. The sum/over-allocation check lives in the caller.
+    function _processAllocations(address token, AllocationData[] calldata allocations)
+        internal
+        returns (uint256 totalAllocated)
+    {
+        uint256 len = allocations.length;
+        if (len == 0) return 0;
+        require(len <= MAX_ALLOCATIONS, "Gen: too many allocations");
+
+        address vault = database.vestingVault();
+
+        for (uint256 i = 0; i < len; i++) {
+            AllocationData calldata a = allocations[i];
+            require(a.beneficiary != address(0), "Gen: zero beneficiary");
+            require(a.amount > 0, "Gen: zero alloc amount");
+            totalAllocated += a.amount;
+
+            if (a.duration == 0) {
+                // Immediate, unlocked allocation.
+                TransferHelper.safeTransfer(token, a.beneficiary, a.amount);
+                emit AllocationMinted(token, a.beneficiary, a.amount);
+            } else {
+                // Vested allocation — park it in the vault and record a schedule.
+                require(vault != address(0), "Gen: vesting vault unset");
+                TransferHelper.safeTransfer(token, vault, a.amount);
+                uint256 id = IVestingVault(vault).createSchedule(
+                    token, a.beneficiary, a.amount, a.cliff, a.duration
+                );
+                emit AllocationVested(token, a.beneficiary, id, a.amount, a.cliff, a.duration);
+            }
+        }
+    }
+
     // ─── CREATE2 + CREATE1 Clone Helpers ───────────────────────────
 
     /// @dev Plain ERC-1167 minimal proxy via CREATE.
     function _clone(address implementation) internal returns (address instance) {
         require(implementation != address(0), "Gen: impl unset");
+        /// @solidity memory-safe-assembly
         assembly {
             let ptr := mload(0x40)
             mstore(ptr, 0x3d602d80600a3d3981f3363d3d373d3d3d363d73000000000000000000000000)
@@ -224,6 +276,7 @@ contract Generator is IGenerator, ReentrancyGuard {
     /// @dev ERC-1167 minimal proxy via CREATE2 for deterministic addresses.
     function _cloneDeterministic(address implementation, bytes32 salt) internal returns (address instance) {
         require(implementation != address(0), "Gen: impl unset");
+        /// @solidity memory-safe-assembly
         assembly {
             let ptr := mload(0x40)
             mstore(ptr, 0x3d602d80600a3d3981f3363d3d373d3d3d363d73000000000000000000000000)

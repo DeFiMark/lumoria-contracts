@@ -43,6 +43,7 @@ interface ITaxHandler {
     event ModuleChangeProposed(uint8 changeType, uint8 indexed moduleType, uint256 buyAlloc, uint256 sellAlloc, uint256 effectiveTime);
     event ModuleRebalanceProposed(uint256[] indices, uint256[] buyAllocs, uint256[] sellAllocs);
     event ModuleChangeCancelled();
+    event ManagementRenounced(address indexed token, uint256 timestamp);
 
     // ─── Initialization ─────────────────────────────────────────────
 
@@ -103,6 +104,15 @@ interface ITaxHandler {
 
     function executeModuleChange() external;
     function cancelModuleChange() external;
+
+    // ─── Renounce (called by creator; one-way, freezes all changes) ──
+
+    /// @notice Permanently freeze this token's tax/module configuration. After
+    ///         this, no fee or module change can ever be proposed or executed,
+    ///         and any in-flight pending change is cancelled. One-way.
+    function renounceManagement() external;
+
+    function managementRenounced() external view returns (bool);
 
     // ─── Views ──────────────────────────────────────────────────────
 

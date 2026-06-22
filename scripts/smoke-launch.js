@@ -82,6 +82,7 @@ async function main() {
         modules,
         LAUNCH_MODE_BYOL,
         byolPayload,
+        [], // no creator allocations in the smoke test
         salt,
         { value: liquidityBNB },
     );

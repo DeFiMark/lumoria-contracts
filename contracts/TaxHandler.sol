@@ -59,6 +59,15 @@ contract TaxHandler is ITaxHandler, ReentrancyGuard {
     address public override creator;
     bool internal _initialized;
 
+    /// @dev When true, this token's tax/module config is frozen forever:
+    ///      no fee or module change can be proposed or executed. One-way.
+    bool public override managementRenounced;
+
+    /// @dev Cached `Database.vestingVault()` at init. Excluded from reward-share
+    ///      tracking so vested-but-unclaimed tokens don't accrue stranded
+    ///      reflections (same rationale the token uses to exclude the pool).
+    address internal _vestingVault;
+
     uint256 internal _buyFee;
     uint256 internal _sellFee;
 
@@ -135,6 +144,7 @@ contract TaxHandler is ITaxHandler, ReentrancyGuard {
         token = token_;
         database = database_;
         creator = creator_;
+        _vestingVault = IDatabase(database_).vestingVault();
         _buyFee = buyFee_;
         _sellFee = sellFee_;
 
@@ -210,6 +220,12 @@ contract TaxHandler is ITaxHandler, ReentrancyGuard {
 
     function setShare(address holder, uint256 amount) external override {
         require(msg.sender == token, "Only token");
+
+        // The VestingVault is excluded from reward-share tracking: tokens it
+        // custodies are locked for a beneficiary who hasn't claimed yet, so
+        // letting the vault accrue reflections would strand them here.
+        if (_vestingVault != address(0) && holder == _vestingVault) return;
+
         uint256 old = _shares[holder];
         if (old == amount) return;
 
@@ -230,6 +246,7 @@ contract TaxHandler is ITaxHandler, ReentrancyGuard {
     // ─── Fee Change Timelock ────────────────────────────────────────
 
     function proposeFeeChange(uint256 newBuyFee, uint256 newSellFee) external override onlyCreator {
+        require(!managementRenounced, "Renounced");
         require(newBuyFee <= MAX_FEE && newSellFee <= MAX_FEE, "Fee exceeds max");
 
         // Instant-apply path: both fees are decreasing (or equal) — always good for holders.
@@ -252,6 +269,7 @@ contract TaxHandler is ITaxHandler, ReentrancyGuard {
     }
 
     function executeFeeChange() external override onlyCreator {
+        require(!managementRenounced, "Renounced");
         PendingFeeChange memory p = pendingFeeChange;
         require(p.pending, "No pending change");
         require(block.timestamp >= p.effectiveTime, "Timelock active");
@@ -280,6 +298,7 @@ contract TaxHandler is ITaxHandler, ReentrancyGuard {
         bytes calldata initPayload,
         AllocationUpdate[] calldata rebalance
     ) external override onlyCreator {
+        require(!managementRenounced, "Renounced");
         require(!pendingModuleChange.pending, "Pending exists");
         require(modules.length < MAX_MODULES, "Max modules");
 
@@ -314,6 +333,7 @@ contract TaxHandler is ITaxHandler, ReentrancyGuard {
         uint256 moduleIndex,
         AllocationUpdate[] calldata rebalance
     ) external override onlyCreator {
+        require(!managementRenounced, "Renounced");
         require(!pendingModuleChange.pending, "Pending exists");
         require(moduleIndex < modules.length, "Bad index");
         require(modules.length > 1, "Cannot remove last");
@@ -347,6 +367,7 @@ contract TaxHandler is ITaxHandler, ReentrancyGuard {
     }
 
     function proposeModuleUpdate(AllocationUpdate[] calldata updates) external override onlyCreator {
+        require(!managementRenounced, "Renounced");
         require(!pendingModuleChange.pending, "Pending exists");
         require(updates.length > 0, "Empty updates");
 
@@ -377,6 +398,7 @@ contract TaxHandler is ITaxHandler, ReentrancyGuard {
     }
 
     function executeModuleChange() external override onlyCreator nonReentrant {
+        require(!managementRenounced, "Renounced");
         PendingModuleChange memory p = pendingModuleChange;
         require(p.pending, "No pending change");
         require(block.timestamp >= p.effectiveTime, "Timelock active");
@@ -402,6 +424,29 @@ contract TaxHandler is ITaxHandler, ReentrancyGuard {
         pendingModuleChange.pending = false;
         delete _pendingRebalance;
         emit ModuleChangeCancelled();
+    }
+
+    // ─── Renounce (one-way; freezes the configuration forever) ──────
+
+    /// @notice Permanently relinquish all management of this token's taxes and
+    ///         modules. After this the fee rates and module set can never
+    ///         change again — not even a holder-friendly fee decrease — making
+    ///         "the tokenomics are frozen" a verifiable on-chain guarantee.
+    ///         Any in-flight pending change is cancelled.
+    function renounceManagement() external override onlyCreator {
+        require(!managementRenounced, "Already renounced");
+        managementRenounced = true;
+
+        // Kill anything in flight so renounce is an instant, total freeze.
+        if (pendingFeeChange.pending) {
+            pendingFeeChange.pending = false;
+        }
+        if (pendingModuleChange.pending) {
+            pendingModuleChange.pending = false;
+            delete _pendingRebalance;
+        }
+
+        emit ManagementRenounced(token, block.timestamp);
     }
 
     // ─── Execute Helpers ────────────────────────────────────────────

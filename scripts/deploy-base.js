@@ -16,6 +16,7 @@
  *                                 low 14 bits of its address, so it is deployed
  *                                 via CREATE2 with a salt mined off-chain.
  *   8. LumoriaLiquidityVault(poolManager, database)
+ *   8b. VestingVault(database)  — shared singleton custodying vested creator allocations
  *   9. LumoriaSwapRouter(poolManager, database)
  *  10. Generator(database)
  *  11. Wire everything into Database via onlyOwner setters
@@ -142,8 +143,9 @@ async function main() {
     console.log(`  LumoriaHook            → ${hookAddr} (salt ${hookSalt})`);
 
     // ── 8-10. Vault + Router + Generator ──────────────────────────
-    console.log("\nDeploying vault, router, generator...");
+    console.log("\nDeploying vault, vesting vault, router, generator...");
     const vault = await deployContract("LumoriaLiquidityVault", [poolManagerAddr, databaseAddr]);
+    const vestingVault = await deployContract("VestingVault", [databaseAddr]);
     const router = await deployContract("LumoriaSwapRouter", [poolManagerAddr, databaseAddr]);
     const generator = await deployContract("Generator", [databaseAddr]);
 
@@ -158,6 +160,7 @@ async function main() {
     await tx("setPoolManager",        database.setPoolManager(poolManagerAddr));
     await tx("setHook",               database.setHook(hookAddr));
     await tx("setLiquidityVault",     database.setLiquidityVault(await vault.getAddress()));
+    await tx("setVestingVault",       database.setVestingVault(await vestingVault.getAddress()));
     await tx("setRouter",             database.setRouter(await router.getAddress()));
     await tx("setGenerator",          database.setGenerator(await generator.getAddress()));
     await tx("setFeeReceiver",        database.setFeeReceiver(await feeReceiver.getAddress()));
@@ -192,6 +195,7 @@ async function main() {
             rebateContract:  await rebate.getAddress(),
             hook:            hookAddr,
             liquidityVault:  await vault.getAddress(),
+            vestingVault:    await vestingVault.getAddress(),
             router:          await router.getAddress(),
             generator:       await generator.getAddress(),
             create2Deployer: await create2Deployer.getAddress(),

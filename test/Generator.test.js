@@ -57,6 +57,7 @@ describe("Generator", function () {
                 singleCreatorFeeModule(creator.address),
                 LAUNCH_MODE.BYOL,
                 encodeBYOLPayload(TOTAL_SUPPLY),
+                [],
                 salt,
                 { value: ethers.parseEther("1") },
             );
@@ -90,6 +91,7 @@ describe("Generator", function () {
                 singleCreatorFeeModule(creator.address),
                 LAUNCH_MODE.BYOL,
                 encodeBYOLPayload(tokensForLP),
+                [],
                 salt,
                 { value: ethers.parseEther("5") },
             );
@@ -125,6 +127,7 @@ describe("Generator", function () {
                     singleCreatorFeeModule(base.signers.creator.address),
                     LAUNCH_MODE.BYOL,
                     encodeBYOLPayload(TOTAL_SUPPLY),
+                    [],
                     randomSalt(),
                     { value: 0 },
                 ),
@@ -140,6 +143,7 @@ describe("Generator", function () {
                     singleCreatorFeeModule(base.signers.creator.address),
                     LAUNCH_MODE.BYOL,
                     encodeBYOLPayload(0n),
+                    [],
                     randomSalt(),
                     { value: ethers.parseEther("1") },
                 ),
@@ -157,6 +161,7 @@ describe("Generator", function () {
                 singleCreatorFeeModule(creator.address),
                 LAUNCH_MODE.BYOL,
                 encodeBYOLPayload(ethers.parseEther("500000000")),
+                [],
                 salt,
                 { value: ethers.parseEther("10") },
             );
@@ -198,6 +203,7 @@ describe("Generator", function () {
                 singleCreatorFeeModule(creator.address),
                 LAUNCH_MODE.FLAT_CURVE,
                 payload,
+                [],
                 salt,
             );
             const receipt = await tx.wait();
@@ -256,10 +262,229 @@ describe("Generator", function () {
                     singleCreatorFeeModule(creator.address),
                     LAUNCH_MODE.FLAT_CURVE,
                     payload,
+                    [],
                     randomSalt(),
                     { value: ethers.parseEther("1") },
                 ),
             ).to.be.revertedWith("Gen: no BNB on FLAT_CURVE");
+        });
+    });
+
+    describe("allocations (B1 + B2)", function () {
+        const ONE_YEAR = 365 * 24 * 3600;
+        const alloc = (beneficiary, amount, cliff = 0, duration = 0) =>
+            ({ beneficiary, amount, cliff, duration });
+
+        it("immediate allocation (duration=0) goes straight to the beneficiary and shrinks the creator remainder", async function () {
+            const base = await loadFixture(deployBase);
+            await useRealGenerator(base);
+            const { creator, user1 } = base.signers;
+
+            const tokensForLP = ethers.parseEther("600000000"); // remainder = 400M
+            const amount = ethers.parseEther("50000000");
+            const salt = randomSalt();
+
+            await expect(
+                base.generator.connect(creator).generateProject(
+                    "Alloc", "ALC", 500, 500,
+                    singleCreatorFeeModule(creator.address),
+                    LAUNCH_MODE.BYOL,
+                    encodeBYOLPayload(tokensForLP),
+                    [alloc(user1.address, amount)],
+                    salt,
+                    { value: ethers.parseEther("5") },
+                ),
+            ).to.emit(base.generator, "AllocationMinted");
+
+            const tokenAddr = await base.generator.predictTokenAddress(salt);
+            const token = await ethers.getContractAt("LumoriaToken", tokenAddr);
+
+            expect(await token.balanceOf(user1.address)).to.equal(amount);
+            const remainder = TOTAL_SUPPLY - tokensForLP;
+            expect(await token.balanceOf(creator.address)).to.equal(remainder - amount);
+        });
+
+        it("vested allocation (duration>0) parks tokens in the vault and records a schedule", async function () {
+            const base = await loadFixture(deployBase);
+            await useRealGenerator(base);
+            const { creator, user1 } = base.signers;
+
+            const tokensForLP = ethers.parseEther("600000000");
+            const amount = ethers.parseEther("50000000");
+            const salt = randomSalt();
+
+            await expect(
+                base.generator.connect(creator).generateProject(
+                    "Vest", "VST", 500, 500,
+                    singleCreatorFeeModule(creator.address),
+                    LAUNCH_MODE.BYOL,
+                    encodeBYOLPayload(tokensForLP),
+                    [alloc(user1.address, amount, 0, ONE_YEAR)],
+                    salt,
+                    { value: ethers.parseEther("5") },
+                ),
+            ).to.emit(base.generator, "AllocationVested");
+
+            const tokenAddr = await base.generator.predictTokenAddress(salt);
+            const token = await ethers.getContractAt("LumoriaToken", tokenAddr);
+            const vaultAddr = await base.vestingVault.getAddress();
+
+            // Vault custodies the locked tokens; the beneficiary has nothing yet.
+            expect(await token.balanceOf(vaultAddr)).to.equal(amount);
+            expect(await token.balanceOf(user1.address)).to.equal(0);
+
+            // Schedule recorded with the right shape.
+            expect(await base.vestingVault.scheduleCount()).to.equal(1);
+            const sched = await base.vestingVault.getSchedule(0);
+            expect(sched.token).to.equal(tokenAddr);
+            expect(sched.beneficiary).to.equal(user1.address);
+            expect(sched.total).to.equal(amount);
+            expect(sched.duration).to.equal(ONE_YEAR);
+
+            const remainder = TOTAL_SUPPLY - tokensForLP;
+            expect(await token.balanceOf(creator.address)).to.equal(remainder - amount);
+        });
+
+        it("excludes the vesting vault from reward-share tracking", async function () {
+            const base = await loadFixture(deployBase);
+            await useRealGenerator(base);
+            const { creator, user1 } = base.signers;
+
+            const tokensForLP = ethers.parseEther("600000000");
+            const amount = ethers.parseEther("50000000");
+            const salt = randomSalt();
+
+            await base.generator.connect(creator).generateProject(
+                "VestShare", "VSH", 500, 500,
+                singleCreatorFeeModule(creator.address),
+                LAUNCH_MODE.BYOL,
+                encodeBYOLPayload(tokensForLP),
+                [alloc(user1.address, amount, 0, ONE_YEAR)],
+                salt,
+                { value: ethers.parseEther("5") },
+            );
+
+            const tokenAddr = await base.generator.predictTokenAddress(salt);
+            const token = await ethers.getContractAt("LumoriaToken", tokenAddr);
+            const taxHandlerAddr = await base.database.tokenTaxHandler(tokenAddr);
+            const taxHandler = await ethers.getContractAt("TaxHandler", taxHandlerAddr);
+            const vaultAddr = await base.vestingVault.getAddress();
+
+            // The vault holds tokens but accrues zero shares; totalShares
+            // reflects only the creator's tracked balance (pool is excluded too).
+            // Tolerance absorbs tiny LP-provisioning dust held by the router/vault;
+            // the point is the vault's 50M allocation is NOT in the share total.
+            expect(await taxHandler.shares(vaultAddr)).to.equal(0);
+            expect(await taxHandler.totalShares()).to.be.closeTo(
+                await token.balanceOf(creator.address),
+                ethers.parseEther("0.001"),
+            );
+        });
+
+        it("reverts when allocations exceed the creator remainder", async function () {
+            const base = await loadFixture(deployBase);
+            await useRealGenerator(base);
+            const { creator, user1 } = base.signers;
+
+            const tokensForLP = ethers.parseEther("600000000"); // remainder = 400M
+            const tooMuch = ethers.parseEther("400000001");
+
+            await expect(
+                base.generator.connect(creator).generateProject(
+                    "Over", "OVR", 0, 0,
+                    singleCreatorFeeModule(creator.address),
+                    LAUNCH_MODE.BYOL,
+                    encodeBYOLPayload(tokensForLP),
+                    [alloc(user1.address, tooMuch)],
+                    randomSalt(),
+                    { value: ethers.parseEther("1") },
+                ),
+            ).to.be.revertedWith("Gen: alloc exceeds remainder");
+        });
+
+        it("reverts on a zero-amount allocation", async function () {
+            const base = await loadFixture(deployBase);
+            await useRealGenerator(base);
+            const { creator, user1 } = base.signers;
+
+            await expect(
+                base.generator.connect(creator).generateProject(
+                    "Zero", "ZRO", 0, 0,
+                    singleCreatorFeeModule(creator.address),
+                    LAUNCH_MODE.BYOL,
+                    encodeBYOLPayload(ethers.parseEther("600000000")),
+                    [alloc(user1.address, 0n)],
+                    randomSalt(),
+                    { value: ethers.parseEther("1") },
+                ),
+            ).to.be.revertedWith("Gen: zero alloc amount");
+        });
+
+        it("supports multiple allocations and carves them all from the remainder", async function () {
+            const base = await loadFixture(deployBase);
+            await useRealGenerator(base);
+            const { creator, user1, user2 } = base.signers;
+
+            const tokensForLP = ethers.parseEther("600000000"); // remainder = 400M
+            const a1 = ethers.parseEther("30000000");
+            const a2 = ethers.parseEther("20000000");
+            const salt = randomSalt();
+
+            await base.generator.connect(creator).generateProject(
+                "Multi", "MLT", 500, 500,
+                singleCreatorFeeModule(creator.address),
+                LAUNCH_MODE.BYOL,
+                encodeBYOLPayload(tokensForLP),
+                [alloc(user1.address, a1), alloc(user2.address, a2, 0, ONE_YEAR)],
+                salt,
+                { value: ethers.parseEther("5") },
+            );
+
+            const tokenAddr = await base.generator.predictTokenAddress(salt);
+            const token = await ethers.getContractAt("LumoriaToken", tokenAddr);
+            const vaultAddr = await base.vestingVault.getAddress();
+
+            expect(await token.balanceOf(user1.address)).to.equal(a1);       // immediate
+            expect(await token.balanceOf(vaultAddr)).to.equal(a2);           // vested
+            const remainder = TOTAL_SUPPLY - tokensForLP;
+            expect(await token.balanceOf(creator.address)).to.equal(remainder - a1 - a2);
+        });
+
+        it("supports allocations on the FLAT_CURVE path", async function () {
+            const base = await loadFixture(deployBase);
+            await useRealGenerator(base);
+            const { creator, user1 } = base.signers;
+            const now = Math.floor((await ethers.provider.getBlock("latest")).timestamp);
+
+            const payload = encodeFlatCurvePayload({
+                hardCap: ethers.parseEther("10"),
+                minContribution: ethers.parseEther("0.1"),
+                maxContribution: ethers.parseEther("5"),
+                tokensForPresale: ethers.parseEther("400000000"),
+                tokensForLP: ethers.parseEther("500000000"), // curve = 900M, remainder = 100M
+                liquidityBps: 8000,
+                creatorBps: 2000,
+                startTime: now + 1,
+                endTime: now + 3600,
+            });
+
+            const amount = ethers.parseEther("40000000");
+            const salt = randomSalt();
+            await base.generator.connect(creator).generateProject(
+                "FCAlloc", "FCA", 0, 0,
+                singleCreatorFeeModule(creator.address),
+                LAUNCH_MODE.FLAT_CURVE,
+                payload,
+                [alloc(user1.address, amount)],
+                salt,
+            );
+
+            const tokenAddr = await base.generator.predictTokenAddress(salt);
+            const token = await ethers.getContractAt("LumoriaToken", tokenAddr);
+
+            expect(await token.balanceOf(user1.address)).to.equal(amount);
+            const remainder = TOTAL_SUPPLY - ethers.parseEther("900000000"); // 100M
+            expect(await token.balanceOf(creator.address)).to.equal(remainder - amount);
         });
     });
 });

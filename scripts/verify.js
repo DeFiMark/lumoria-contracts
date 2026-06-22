@@ -60,6 +60,7 @@ async function main() {
     verify(core.create2Deployer, []);
     verify(core.hook, [v4.poolManager, core.database], "contracts/v4/LumoriaHook.sol:LumoriaHook");
     verify(core.liquidityVault, [v4.poolManager, core.database], "contracts/v4/LumoriaLiquidityVault.sol:LumoriaLiquidityVault");
+    verify(core.vestingVault, [core.database], "contracts/VestingVault.sol:VestingVault");
     verify(core.router, [v4.poolManager, core.database], "contracts/v4/LumoriaSwapRouter.sol:LumoriaSwapRouter");
     verify(core.generator, [core.database]);
 
