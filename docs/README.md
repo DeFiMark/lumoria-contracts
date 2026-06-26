@@ -29,7 +29,7 @@ See the "Progress" section in [ROADMAP.md](./ROADMAP.md). At a glance:
 - ✅ **Phase 3** — DEX Refactor: Factory, Pair, Router, RebateContract *(DEX superseded by Phase 5)*
 - ✅ **Phase 4** — Launch System: Generator, FlatCurve
 - ✅ **Phase 5** — Uniswap V4 Migration: LumoriaHook + LiquidityVault + SwapRouter on the canonical V4 PoolManager
-- ✅ **Phase 6** — Pre-Beta Frontend Alignment: token vesting (`VestingVault`) + custom allocations (`Generator`) + management renounce (`TaxHandler`); drift audit resolved (`CONTRACTS_DRIFT_RESOLUTION.md`). 171 tests green; pre-mainnet audit pending.
+- ✅ **Phase 6** — Pre-Beta Frontend Alignment: token vesting (`VestingVault`) + custom allocations (`Generator`) + management renounce (`TaxHandler`); drift audit resolved (`CONTRACTS_DRIFT_RESOLUTION.md`). 175 tests green; pre-mainnet audit pending.
 
 ## Repo Layout
 

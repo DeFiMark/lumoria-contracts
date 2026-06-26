@@ -599,7 +599,7 @@ The token creator can:
 - **Remove modules**: 24-hour timelock
 - **Update module allocations**: 24-hour timelock
 - **Max fee cap**: 98% (MAX_FEE = 9800 bps)
-- **Renounce management** (`renounceManagement()`): a **one-way, permanent freeze** of the token's tax + module configuration. After it, no fee or module change can ever be proposed or executed — not even a holder-friendly fee *decrease* — and any in-flight pending change is cancelled. Sets `managementRenounced = true` and emits `ManagementRenounced(token, timestamp)`. This is the "tokenomics are frozen forever" trust signal (distinct from the LP lock, which is already permanent). The six mutators (`proposeFeeChange` / `executeFeeChange` / `proposeModuleAdd|Remove|Update` / `executeModuleChange`) all guard on `!managementRenounced`.
+- **Renounce management** (`renounceManagement()`): a **one-way, permanent freeze** of the token's tax + module configuration. After it, no fee or module change can ever be proposed or executed — not even a holder-friendly fee *decrease* — and any in-flight pending change is cancelled. Sets `managementRenounced = true` and emits `ManagementRenounced(token, timestamp)`. This is the "tokenomics are frozen forever" trust signal (distinct from the LP lock, which is already permanent). The six mutators (`proposeFeeChange` / `executeFeeChange` / `proposeModuleAdd|Remove|Update` / `executeModuleChange`) all guard on `!managementRenounced`. **Renounce is also honored by the RebateContract** (§7): once `managementRenounced` is true, the rebate rate/withdraw/re-fund paths are frozen (top-ups stay open). So "renounce" is a complete freeze of every creator-editable control — fees, modules, and rebate.
 
 **All changes that could negatively impact holders require 24h notice.** This gives holders time to exit if they disagree with the direction.
 
@@ -772,7 +772,12 @@ function creditRebate(address token, address buyer, uint256 tokensBought) extern
 
 // Admin: authorize/deauthorize creditors
 function setAuthorizedCreditor(address creditor, bool authorized) external;
+
+// View: true once the token's creator has renounced management (TaxHandler)
+function isManagementRenounced(address token) external view returns (bool);
 ```
+
+**Renounce freeze (honors TaxHandler `managementRenounced`).** When the token's creator has renounced management, `setRebateBps`, `withdrawFunds`, and `fundRebate` revert `"Rebate: renounced"` (resolved live via `Database.tokenTaxHandler(token).managementRenounced()`). **`topUpRebate` stays open** — it can only add funds at the existing rate, never change or remove them. So a locked token's rebate is frozen (rate fixed, no withdrawals) but can still be refilled and keeps paying buyers via `creditRebate` (which is never gated — a rebate must never block or change mid-trade). This makes the "Lock Token" promise cover fees, modules, **and** rebate. Funding must happen **before** renounce — a renounced token can't open a new rebate (no `fundRebate`), only top up an existing one.
 
 ### Credit Flow (called by Router)
 ```solidity

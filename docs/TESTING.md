@@ -146,14 +146,14 @@ Modules infer `taxHandler` from `msg.sender` at `__init__` — payloads don't ca
 | `v4/LumoriaHook.sol` | ✅ | ✅ | buy/sell fee math to the wei, 98% + 0% taxes, multi-pool isolation, exactOut rejection, **bypass-proofing via raw PoolManager swaps**, pool-creation/liquidity/donate gates, rebate + volume attribution |
 | `v4/LumoriaLiquidityVault.sol` | ✅ | ✅ | router-only entry, lazy pool init at implied price, locked-liquidity growth, dust refunds (implicit in module flows) |
 | `v4/LumoriaSwapRouter.sol` | ✅ | ✅ | buy/sell exactIn, amountOutMin + deadline guards, addLiquidityETH delegation, non-Lumoria rejection |
-| `RebateContract.sol` | ✅ | ✅ | fund / topUp / credit / withdraw, silent-exit, re-activation (creditor = hook) |
+| `RebateContract.sol` | ✅ | ✅ | fund / topUp / credit / withdraw, silent-exit, re-activation (creditor = hook), **renounce freeze (Q1): rate/withdraw/re-fund blocked, top-up + credit stay open** |
 | `Generator.sol` | ✅ | ✅ | BYOL flow (V4 pool init + vault lock), FlatCurve wiring, predictTokenAddress, post-launch tradability, **creator allocations (B2): immediate + vested, over-allocation revert, FlatCurve path** |
 | `FlatCurve.sol` | ✅ | ✅ | contribute / refund / launch (success + fail, V4 pool seed) / claim / withdrawOnFailure |
 | `VestingVault.sol` | ✅ | ✅ | generator-gated `createSchedule` + validations, linear+cliff vesting math, `release` (full/partial/double), permissionless poke, beneficiary index |
 
 ### Blocked — add tests once unblocked
 
-None currently. All Phase 1-5 contracts — plus the Phase-6 vesting/allocations/renounce work — are under test (**171 tests green**).
+None currently. All Phase 1-5 contracts — plus the Phase-6 vesting/allocations/renounce work (incl. the rebate renounce-freeze) — are under test (**175 tests green**).
 
 ---
 

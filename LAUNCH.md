@@ -28,8 +28,8 @@ Critical path (closed-beta-first):
 ## 1. Code & Repo (✅ complete)
 
 - [x] Phases 1–5 implemented; custom V2 DEX retired to `legacy/` (Uniswap V4 + LumoriaHook).
-- [x] **Phase 6 — frontend alignment**: built token vesting (`VestingVault`) + custom allocations (`Generator.allocations`) + management renounce (`TaxHandler.renounceManagement`); reward-share exclusion for the vault (TaxHandler-side, token untouched). Full drift audit resolved in `docs/CONTRACTS_DRIFT_RESOLUTION.md`.
-- [x] `npm test` green — **171 passing**.
+- [x] **Phase 6 — frontend alignment**: built token vesting (`VestingVault`) + custom allocations (`Generator.allocations`) + management renounce (`TaxHandler.renounceManagement`, which also freezes the `RebateContract` rate/withdraw paths); reward-share exclusion for the vault (TaxHandler-side, token untouched). Full drift audit + follow-up Q&A (rebate lock, funding path, reward-token mode) resolved in `docs/CONTRACTS_DRIFT_RESOLUTION.md`.
+- [x] `npm test` green — **175 passing**.
 - [x] Dead-code sweep: deleted `IWETH.sol`, `lib/Cloneable.sol`; kept `EnumerableSet.sol` for future use.
 - [x] Stale comments + docs refined to the V4 / pool-level-tax / vault-lock model (DESIGN/ROADMAP/FRONTEND).
 - [x] Git hygiene: `.claude/` gitignored; stale `goofy-booth` worktree + branch removed.
@@ -59,7 +59,7 @@ Validates the deploy + a real launch/buy against the **actual canonical V4 PoolM
 > - **Mind the admin key** — admin is a hot deployer EOA (multisig deferred, §7); a compromised key can repoint `Database` infra (hook/router/feeReceiver). For a real-money beta, consider a multisig sooner, or tightly isolate the deployer key.
 > - **Tell beta users it's unaudited.**
 
-- [ ] Engage an auditor. **Scope centerpiece: `v4/LumoriaHook.sol`** — it runs on every swap and handles up to 98% of swap flow. Include `LumoriaLiquidityVault`, **`VestingVault`** (new — custodies vested allocations, non-revocable), `LumoriaSwapRouter`, `TaxHandler` (incl. the new `renounceManagement` freeze + vesting-vault share exclusion), `Generator` (incl. the new `allocations` carve path), `RebateContract`, and the CREATE2 deploy/trust chain (`Create2Deployer` + `hook-miner.js`).
+- [ ] Engage an auditor. **Scope centerpiece: `v4/LumoriaHook.sol`** — it runs on every swap and handles up to 98% of swap flow. Include `LumoriaLiquidityVault`, **`VestingVault`** (new — custodies vested allocations, non-revocable), `LumoriaSwapRouter`, `TaxHandler` (incl. the new `renounceManagement` freeze + vesting-vault share exclusion), `Generator` (incl. the new `allocations` carve path), `RebateContract` (incl. the new renounce-freeze that reads the token's `TaxHandler.managementRenounced`), and the CREATE2 deploy/trust chain (`Create2Deployer` + `hook-miner.js`).
 - [ ] Brief the auditor with the prior-art hook exploits noted in `DESIGN.md §14` (Cork Protocol, May 2025; Bunni, Sep 2025 — both hook-logic bugs).
 - [ ] Pre-audit hardening (do before handing over, parallel with everything):
   - [ ] Run **Slither** / static analysis; triage findings.

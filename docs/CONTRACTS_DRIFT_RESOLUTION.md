@@ -172,3 +172,38 @@ All derive from existing on-chain state/events; I'll fold them into the subgraph
 - **`PENDING_LAUNCH`** → FlatCurve-pre-start only; otherwise drop. See §6.
 
 *Net: zero remaining Type-B blockers. The only new ABI to integrate is §1 (renounce + vesting + allocations); the rest is binding the UI to capabilities that already exist (§2) or cosmetic (§6).*
+
+---
+
+## 7. Follow-up Q&A (rebate lock + reward tokens) — 2026-06-24
+
+### Q1 — Does renounce also freeze the RebateContract? ✅ NOW YES (built)
+Originally renounce (B6) froze only fees + modules; the RebateContract is a separate singleton and was still editable. **Fixed** — renounce now freezes the rebate "control" surface too, so the Lock modal's "fee **and rebate** controls can no longer be edited" is accurate.
+
+- After `TaxHandler.renounceManagement()`, for that token the RebateContract **blocks** `setRebateBps`, `withdrawFunds`, and `fundRebate` (all revert `"Rebate: renounced"`).
+- **`topUpRebate` stays open** — it can only add funds at the existing rate, never change or withdraw them (additive-only, like a fee decrease). So a renounced token's rebate can still be refilled and keeps paying buyers; the creator just can't change the rate or claw funds back.
+- **New read:** `RebateContract.isManagementRenounced(token) → bool` (resolves the token's TaxHandler and reads its flag). Use it to disable the rate/withdraw controls in the Manage UI.
+- **UX consequence:** a creator must **fund the rebate before locking** — a renounced token can't open a *new* rebate (only top up an existing one). Surface this in the Lock flow ("set up your rebate before you lock").
+
+### Q2 — Rebate funding path (no contract change)
+`generateProject` has no rebate param by design; rebate is a **post-launch tx**. The "reserved supply" the Create UI collects is not reserved on-chain — the creator keeps those tokens and funds the pool afterward:
+
+1. `generateProject(...)` → creator receives the remainder (must keep enough for the rebate + anything not allocated/vested).
+2. `token.approve(rebateContract, amount)`.
+3. `RebateContract.fundRebate(token, amount, rebateBps)` — pulls tokens, sets rate, activates. Gated to `Database.tokenCreator(token)`.
+
+Later: `topUpRebate(token, amount)`, `setRebateBps(token, bps)`, `withdrawFunds(token, amount)` (the last two only while **not** renounced — see Q1).
+
+⚠️ **Interplay with allocations (B2):** the rebate is funded from the creator's *kept* tokens, which is the same pool the B2 allocations carve from. The wizard must reserve the rebate amount client-side so the creator doesn't allocate/vest away the tokens they need to fund it. And if the token will be locked, fund the rebate **before** the lock tx.
+
+### Q3 — Arbitrary reward token at launch (token-mode) ✅ supported
+`RewardModule` supports token-mode at launch via its init payload `(token, rewardToken, externalRouter, externalWBNB, minDistribution)`. If `rewardToken != 0`, the module swaps collected BNB → rewardToken via `externalRouter.swapExactETHForTokensSupportingFeeOnTransferTokens` over `[externalWBNB, rewardToken]`. So a reward-token dropdown is buildable, but each non-BNB option must supply **three real BSC addresses** in the payload:
+
+- **`rewardToken`** — a real BSC ERC20 with WBNB liquidity. Use **BSC addresses**, not Ethereum-mainnet ones: USDC `0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d`, ETH (Binance-peg) `0x2170Ed0880ac9A755fd29B2688956BD959F933F8`, BTCB `0x7130d2A12B9BCbFAe4f2634d864A1Ee1Ce3Ead9c`, etc.
+- **`externalRouter`** — a V2-compatible router with that liquidity: **PancakeSwap V2** `0x10ED43C718714eb63d5aA57B78B54704E256024E`.
+- **`externalWBNB`** — `0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c`.
+
+UI notes:
+- **Drop `CONTROL`** from the dropdown — it's a stale platform-token leftover (PXX was cut; there is no Lumoria platform token).
+- The module swaps with `amountOutMin = 0`, so only offer **liquid** reward tokens (thin liquidity = bad fills / sandwich risk, though it won't block trades).
+- **Recommendation:** default the beta to **BNB-mode rewards** (zero external-router/slippage surface); offer token-mode as an advanced option. The contracts support both — this is a product call, not a contract gate.

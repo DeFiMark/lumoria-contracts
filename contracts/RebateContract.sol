@@ -30,6 +30,7 @@ pragma solidity 0.8.28;
 import "./interfaces/IRebate.sol";
 import "./interfaces/IERC20.sol";
 import "./interfaces/IDatabase.sol";
+import "./interfaces/ITaxHandler.sol";
 import "./lib/Ownable.sol";
 import "./lib/TransferHelper.sol";
 import "./lib/ReentrancyGuard.sol";
@@ -55,6 +56,21 @@ contract RebateContract is IRebate, Ownable, ReentrancyGuard {
         return rebates[token];
     }
 
+    /// @notice True once the token's creator has permanently renounced
+    ///         management (via its TaxHandler). When renounced, the rebate
+    ///         rate and funds are frozen — only top-ups remain (additive only).
+    function isManagementRenounced(address token) public view returns (bool) {
+        address th = database.tokenTaxHandler(token);
+        return th != address(0) && ITaxHandler(th).managementRenounced();
+    }
+
+    /// @dev Guards rebate "control" actions (rate change, withdrawal, re-fund)
+    ///      against a renounced token. Top-ups stay open since they can only
+    ///      add funds at the existing rate — never change or remove them.
+    function _requireNotRenounced(address token) internal view {
+        require(!isManagementRenounced(token), "Rebate: renounced");
+    }
+
     // ─── Creator-facing ─────────────────────────────────────────────
 
     /// @notice Fund (or re-fund) a token's rebate pool and set the bps rate.
@@ -64,6 +80,7 @@ contract RebateContract is IRebate, Ownable, ReentrancyGuard {
         require(rebateBps > 0 && rebateBps <= MAX_REBATE_BPS, "Rebate: bad bps");
         require(database.isLumoriaToken(token), "Rebate: not Lumoria token");
         require(msg.sender == database.tokenCreator(token), "Rebate: only creator");
+        _requireNotRenounced(token);
 
         RebateConfig storage cfg = rebates[token];
         // First funding or re-funding — set/rebind creator + rate.
@@ -104,6 +121,7 @@ contract RebateContract is IRebate, Ownable, ReentrancyGuard {
         require(rebateBps > 0 && rebateBps <= MAX_REBATE_BPS, "Rebate: bad bps");
         RebateConfig storage cfg = rebates[token];
         require(msg.sender == cfg.creator, "Rebate: only creator");
+        _requireNotRenounced(token);
         uint256 old = cfg.rebateBps;
         cfg.rebateBps = rebateBps;
         emit RebateBpsUpdated(token, old, rebateBps);
@@ -112,6 +130,7 @@ contract RebateContract is IRebate, Ownable, ReentrancyGuard {
     function withdrawFunds(address token, uint256 amount) external override nonReentrant {
         RebateConfig storage cfg = rebates[token];
         require(msg.sender == cfg.creator, "Rebate: only creator");
+        _requireNotRenounced(token);
         require(amount > 0 && amount <= cfg.fundedBalance, "Rebate: bad amount");
         cfg.fundedBalance -= amount;
         if (cfg.fundedBalance == 0) {

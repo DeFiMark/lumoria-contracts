@@ -195,4 +195,63 @@ describe("RebateContract", function () {
                 .withArgs(tokenAddr, 5000, 7000);
         });
     });
+
+    describe("renounce freezes rebate controls (Q1)", function () {
+        async function fundedAndLaunched(base) {
+            const launched = await launch(base);
+            const { creator, owner } = base.signers;
+            await launched.token.connect(owner).transfer(creator.address, ethers.parseEther("2000"));
+            await launched.token.connect(creator).approve(await base.rebate.getAddress(), ethers.MaxUint256);
+            await base.rebate.connect(creator).fundRebate(launched.tokenAddr, ethers.parseEther("500"), 5000);
+            return launched;
+        }
+
+        it("isManagementRenounced tracks the token's TaxHandler", async function () {
+            const base = await loadFixture(deployBase);
+            const launched = await fundedAndLaunched(base);
+            expect(await base.rebate.isManagementRenounced(launched.tokenAddr)).to.equal(false);
+            await launched.taxHandler.connect(base.signers.creator).renounceManagement();
+            expect(await base.rebate.isManagementRenounced(launched.tokenAddr)).to.equal(true);
+        });
+
+        it("blocks setRebateBps, withdrawFunds, and fundRebate after renounce", async function () {
+            const base = await loadFixture(deployBase);
+            const launched = await fundedAndLaunched(base);
+            const { creator } = base.signers;
+            await launched.taxHandler.connect(creator).renounceManagement();
+
+            await expect(base.rebate.connect(creator).setRebateBps(launched.tokenAddr, 7000))
+                .to.be.revertedWith("Rebate: renounced");
+            await expect(base.rebate.connect(creator).withdrawFunds(launched.tokenAddr, ethers.parseEther("100")))
+                .to.be.revertedWith("Rebate: renounced");
+            await expect(base.rebate.connect(creator).fundRebate(launched.tokenAddr, ethers.parseEther("100"), 6000))
+                .to.be.revertedWith("Rebate: renounced");
+        });
+
+        it("still allows top-ups after renounce (additive only, rate unchanged)", async function () {
+            const base = await loadFixture(deployBase);
+            const launched = await fundedAndLaunched(base);
+            const { creator } = base.signers;
+            await launched.taxHandler.connect(creator).renounceManagement();
+
+            await expect(base.rebate.connect(creator).topUpRebate(launched.tokenAddr, ethers.parseEther("250")))
+                .to.emit(base.rebate, "RebateToppedUp");
+            const cfg = await base.rebate.getRebate(launched.tokenAddr);
+            expect(cfg.fundedBalance).to.equal(ethers.parseEther("750"));
+            expect(cfg.rebateBps).to.equal(5000);
+        });
+
+        it("buyers are still credited after renounce (the pool keeps paying out)", async function () {
+            const base = await loadFixture(deployBase);
+            const launched = await fundedAndLaunched(base);
+            const { creator, user1, user2 } = base.signers;
+            await launched.taxHandler.connect(creator).renounceManagement();
+            await base.rebate.setAuthorizedCreditor(user1.address, true);
+
+            await expect(
+                base.rebate.connect(user1).creditRebate(launched.tokenAddr, user2.address, ethers.parseEther("100")),
+            ).to.emit(base.rebate, "RebateCredited");
+            expect(await launched.token.balanceOf(user2.address)).to.equal(ethers.parseEther("50"));
+        });
+    });
 });

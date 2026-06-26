@@ -182,7 +182,7 @@ Per-token orchestrator. Distributes BNB tax to modules, holds timelock state, ag
 - `proposeModuleRemove(index, AllocationUpdate[] rebalance)` — atomic remove + rebalance.
 - `proposeModuleUpdate(AllocationUpdate[] updates)` — bulk allocation rewrites.
 - `executeModuleChange()`, `cancelModuleChange()`.
-- `renounceManagement()` — **one-way, permanent.** Freezes all fee/module changes forever (even a decrease) and cancels any pending change. Backs the Manage "Lock Token" action. After this, all propose/execute calls revert `"Renounced"`.
+- `renounceManagement()` — **one-way, permanent.** Freezes all fee/module changes forever (even a decrease) and cancels any pending change. Backs the Manage "Lock Token" action. After this, all propose/execute calls revert `"Renounced"`. **It also freezes the token's rebate controls** (rate/withdraw/re-fund) via `RebateContract.isManagementRenounced` — so the Lock modal's "fee and rebate controls" promise is accurate. ⚠️ Tell creators to **fund their rebate before locking** (a locked token can't open a new rebate, only top up an existing one).
 - `receiveBuyTax()` / `receiveSellTax()` payable — called by the **LumoriaHook** mid-swap (permissionless deposits; depositing tax is harmless).
 - `setShare(holder, amount)` — **Token-only**.
 
@@ -392,13 +392,14 @@ Global contract. One rebate pool per token. Creator funds with their own token s
 - `getRebate(token)` → `{ rebateBps, fundedBalance, creator, active }`.
 - `rebates(token)` → same (auto-getter on the public mapping).
 - `authorizedCreditors(addr)` → which addresses may call `creditRebate` (typically just the Router).
+- `isManagementRenounced(token)` → `bool` — `true` once the creator has locked the token (Q1). When `true`, the rate/withdraw/re-fund controls are frozen (only `topUpRebate` works) — disable those controls in the UI.
 
 **Key writes (creator only unless noted):**
-- `fundRebate(token, amount, rebateBps)` — first-time or re-funding. Requires `token.approve(rebate, amount)` first. Sets/updates bps rate.
-- `topUpRebate(token, amount)` — add to existing pool without changing the rate. Auto-reactivates a drained pool.
-- `setRebateBps(token, rebateBps)` — adjust the rate without funding.
-- `withdrawFunds(token, amount)` — creator pulls unused tokens out. Deactivates the pool if drained.
-- `creditRebate(token, buyer, tokensBought)` — **authorized creditors only** (the hook). Silent exit on empty/inactive.
+- `fundRebate(token, amount, rebateBps)` — first-time or re-funding. Requires `token.approve(rebate, amount)` first. Sets/updates bps rate. **The launch UI's "rebate" step is this call, post-`generateProject`** — there is no rebate param on `generateProject`. Reserve the rebate tokens out of the creator's kept balance (they compete with B2 allocations). **Reverts `"Rebate: renounced"` if the token is locked** — fund before locking.
+- `topUpRebate(token, amount)` — add to existing pool without changing the rate. Auto-reactivates a drained pool. **Stays allowed after lock** (additive only).
+- `setRebateBps(token, rebateBps)` — adjust the rate without funding. **Reverts `"Rebate: renounced"` after lock.**
+- `withdrawFunds(token, amount)` — creator pulls unused tokens out. Deactivates the pool if drained. **Reverts `"Rebate: renounced"` after lock.**
+- `creditRebate(token, buyer, tokensBought)` — **authorized creditors only** (the hook). Silent exit on empty/inactive. Unaffected by lock — a locked token's rebate keeps paying buyers.
 - `setAuthorizedCreditor(creditor, authorized)` — **owner only** (platform admin).
 
 **Events:**
