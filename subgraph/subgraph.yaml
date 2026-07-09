@@ -1,0 +1,366 @@
+specVersion: 1.0.0
+description: Lumoria — curated launchpad on Uniswap V4 (LumoriaHook pool-level BNB taxes) on BNB Chain.
+schema:
+  file: ./schema.graphql
+dataSources:
+  # ─── Database (registry, volume, platform config) ──────────────────
+  - kind: ethereum
+    name: Database
+    network: bsc
+    source:
+      abi: Database
+      address: "0x0000000000000000000000000000000000000000"
+      startBlock: 0
+    mapping:
+      kind: ethereum/events
+      apiVersion: 0.0.9
+      language: wasm/assemblyscript
+      file: ./src/database.ts
+      entities: [Token, Module, ModuleAddress, Creator, PlatformConfig, PlatformDayData, UserVolume, SystemAddresses, Holder, User]
+      abis:
+        - name: Database
+          file: ./abis/Database.json
+        - name: TaxHandler
+          file: ./abis/TaxHandler.json
+        - name: LumoriaToken
+          file: ./abis/LumoriaToken.json
+        - name: RewardModule
+          file: ./abis/RewardModule.json
+        - name: BurnModule
+          file: ./abis/BurnModule.json
+        - name: LiquidityModule
+          file: ./abis/LiquidityModule.json
+      eventHandlers:
+        - event: TokenRegistered(indexed address,indexed address,address)
+          handler: handleTokenRegistered
+        - event: VolumeRegistered(indexed address,indexed address,uint256)
+          handler: handleVolumeRegistered
+        - event: PlatformFeeUpdated(uint256,uint256)
+          handler: handlePlatformFeeUpdated
+
+  # ─── Generator (launches + allocations) ────────────────────────────
+  - kind: ethereum
+    name: Generator
+    network: bsc
+    source:
+      abi: Generator
+      address: "0x0000000000000000000000000000000000000000"
+      startBlock: 0
+    mapping:
+      kind: ethereum/events
+      apiVersion: 0.0.9
+      language: wasm/assemblyscript
+      file: ./src/generator.ts
+      entities: [Token, Raise, TokenAllocation, VestingSchedule]
+      abis:
+        - name: Generator
+          file: ./abis/Generator.json
+        - name: FlatCurve
+          file: ./abis/FlatCurve.json
+      eventHandlers:
+        - event: ProjectGenerated(indexed address,indexed address,indexed address,string,string,uint256,uint256,uint8)
+          handler: handleProjectGenerated
+        - event: FlatCurveLaunched(indexed address,indexed address,uint256)
+          handler: handleFlatCurveLaunched
+        - event: AllocationMinted(indexed address,indexed address,uint256)
+          handler: handleAllocationMinted
+        - event: AllocationVested(indexed address,indexed address,indexed uint256,uint256,uint64,uint64)
+          handler: handleAllocationVested
+
+  # ─── LumoriaHook (the primary trade source) ────────────────────────
+  - kind: ethereum
+    name: LumoriaHook
+    network: bsc
+    source:
+      abi: LumoriaHook
+      address: "0x0000000000000000000000000000000000000000"
+      startBlock: 0
+    mapping:
+      kind: ethereum/events
+      apiVersion: 0.0.9
+      language: wasm/assemblyscript
+      file: ./src/hook.ts
+      entities: [Token, Trade, TokenDayData, TokenHourData, TokenMinuteData, PlatformDayData]
+      abis:
+        - name: LumoriaHook
+          file: ./abis/LumoriaHook.json
+      eventHandlers:
+        - event: TokenPurchased(indexed address,indexed address,uint256,uint256,uint256,uint256)
+          handler: handleTokenPurchased
+        - event: TokenSold(indexed address,indexed address,uint256,uint256,uint256,uint256)
+          handler: handleTokenSold
+        - event: LumoriaPoolInitialized(indexed address,indexed bytes32)
+          handler: handleLumoriaPoolInitialized
+
+  # ─── LumoriaLiquidityVault (locked liquidity / TVL) ────────────────
+  - kind: ethereum
+    name: LumoriaLiquidityVault
+    network: bsc
+    source:
+      abi: LumoriaLiquidityVault
+      address: "0x0000000000000000000000000000000000000000"
+      startBlock: 0
+    mapping:
+      kind: ethereum/events
+      apiVersion: 0.0.9
+      language: wasm/assemblyscript
+      file: ./src/vault.ts
+      entities: [Token]
+      abis:
+        - name: LumoriaLiquidityVault
+          file: ./abis/LumoriaLiquidityVault.json
+      eventHandlers:
+        - event: PoolInitialized(indexed address,indexed bytes32,uint160)
+          handler: handlePoolInitialized
+        - event: LiquidityLocked(indexed address,uint256,uint256,uint128,uint128)
+          handler: handleLiquidityLocked
+
+  # ─── FeeReceiver (platform revenue) ────────────────────────────────
+  - kind: ethereum
+    name: FeeReceiver
+    network: bsc
+    source:
+      abi: FeeReceiver
+      address: "0x0000000000000000000000000000000000000000"
+      startBlock: 0
+    mapping:
+      kind: ethereum/events
+      apiVersion: 0.0.9
+      language: wasm/assemblyscript
+      file: ./src/feeReceiver.ts
+      entities: [PlatformConfig, PlatformDayData]
+      abis:
+        - name: FeeReceiver
+          file: ./abis/FeeReceiver.json
+      eventHandlers:
+        # FeeReceived fires on EVERY inflow (receiveFee emits it too), so it is
+        # the single source for the platform fee total. TokenFeeReceived is a
+        # subset (tagged inflows) and would double-count — intentionally unindexed.
+        - event: FeeReceived(indexed address,uint256)
+          handler: handleFeeReceived
+
+  # ─── RebateContract (per-token rebate pools) ───────────────────────
+  - kind: ethereum
+    name: RebateContract
+    network: bsc
+    source:
+      abi: RebateContract
+      address: "0x0000000000000000000000000000000000000000"
+      startBlock: 0
+    mapping:
+      kind: ethereum/events
+      apiVersion: 0.0.9
+      language: wasm/assemblyscript
+      file: ./src/rebate.ts
+      entities: [Rebate, RebateCredit, Token]
+      abis:
+        - name: RebateContract
+          file: ./abis/RebateContract.json
+      eventHandlers:
+        - event: RebateFunded(indexed address,indexed address,uint256,uint256)
+          handler: handleRebateFunded
+        - event: RebateToppedUp(indexed address,uint256,uint256)
+          handler: handleRebateToppedUp
+        - event: RebateCredited(indexed address,indexed address,uint256)
+          handler: handleRebateCredited
+        - event: RebateBpsUpdated(indexed address,uint256,uint256)
+          handler: handleRebateBpsUpdated
+        - event: RebateWithdrawn(indexed address,uint256)
+          handler: handleRebateWithdrawn
+        - event: RebateDeactivated(indexed address)
+          handler: handleRebateDeactivated
+
+  # ─── VestingVault (vested creator allocations) ─────────────────────
+  - kind: ethereum
+    name: VestingVault
+    network: bsc
+    source:
+      abi: VestingVault
+      address: "0x0000000000000000000000000000000000000000"
+      startBlock: 0
+    mapping:
+      kind: ethereum/events
+      apiVersion: 0.0.9
+      language: wasm/assemblyscript
+      file: ./src/vestingVault.ts
+      entities: [VestingSchedule, VestingRelease, User]
+      abis:
+        - name: VestingVault
+          file: ./abis/VestingVault.json
+      eventHandlers:
+        - event: ScheduleCreated(indexed uint256,indexed address,indexed address,uint256,uint64,uint64,uint64)
+          handler: handleScheduleCreated
+        - event: TokensReleased(indexed uint256,indexed address,uint256)
+          handler: handleTokensReleased
+
+templates:
+  # ─── LumoriaToken (one per token) — holders/supply ─────────────────
+  - kind: ethereum
+    name: LumoriaToken
+    network: bsc
+    source:
+      abi: LumoriaToken
+    mapping:
+      kind: ethereum/events
+      apiVersion: 0.0.9
+      language: wasm/assemblyscript
+      file: ./src/token.ts
+      entities: [Token, Holder, User, HolderDayData, SystemAddresses]
+      abis:
+        - name: LumoriaToken
+          file: ./abis/LumoriaToken.json
+      eventHandlers:
+        - event: Transfer(indexed address,indexed address,uint256)
+          handler: handleTransfer
+
+  # ─── TaxHandler (one per token) — fees, modules, renounce ──────────
+  - kind: ethereum
+    name: TaxHandler
+    network: bsc
+    source:
+      abi: TaxHandler
+    mapping:
+      kind: ethereum/events
+      apiVersion: 0.0.9
+      language: wasm/assemblyscript
+      file: ./src/taxHandler.ts
+      entities: [Token, Module, ModuleAddress, ModuleEvent, FeeChange, PendingChange]
+      abis:
+        - name: TaxHandler
+          file: ./abis/TaxHandler.json
+        - name: RewardModule
+          file: ./abis/RewardModule.json
+      eventHandlers:
+        - event: FeesUpdated(uint256,uint256,uint256,uint256)
+          handler: handleFeesUpdated
+        - event: FeeChangeProposed(uint256,uint256,uint256)
+          handler: handleFeeChangeProposed
+        - event: FeeChangeCancelled()
+          handler: handleFeeChangeCancelled
+        - event: ModuleAdded(indexed uint8,indexed address,uint256,uint256)
+          handler: handleModuleAdded
+        - event: ModuleRemoved(indexed uint8,indexed address)
+          handler: handleModuleRemoved
+        - event: ModuleUpdated(indexed uint8,indexed address,uint256,uint256)
+          handler: handleModuleUpdated
+        - event: ModuleChangeProposed(uint8,indexed uint8,uint256,uint256,uint256)
+          handler: handleModuleChangeProposed
+        - event: ModuleRebalanceProposed(uint256[],uint256[],uint256[])
+          handler: handleModuleRebalanceProposed
+        - event: ModuleChangeCancelled()
+          handler: handleModuleChangeCancelled
+        - event: ManagementRenounced(indexed address,uint256)
+          handler: handleManagementRenounced
+
+  # ─── CreatorFeeModule (type 3) ─────────────────────────────────────
+  - kind: ethereum
+    name: CreatorFeeModule
+    network: bsc
+    source:
+      abi: CreatorFeeModule
+    mapping:
+      kind: ethereum/events
+      apiVersion: 0.0.9
+      language: wasm/assemblyscript
+      file: ./src/creatorFeeModule.ts
+      entities: [Module, CreatorFeeForward]
+      abis:
+        - name: CreatorFeeModule
+          file: ./abis/CreatorFeeModule.json
+      eventHandlers:
+        - event: TaxForwarded(indexed address,uint256)
+          handler: handleTaxForwarded
+        - event: RecipientUpdated(indexed address,indexed address)
+          handler: handleRecipientUpdated
+
+  # ─── RewardModule (type 0) ─────────────────────────────────────────
+  - kind: ethereum
+    name: RewardModule
+    network: bsc
+    source:
+      abi: RewardModule
+    mapping:
+      kind: ethereum/events
+      apiVersion: 0.0.9
+      language: wasm/assemblyscript
+      file: ./src/rewardModule.ts
+      entities: [Module, RewardClaim]
+      abis:
+        - name: RewardModule
+          file: ./abis/RewardModule.json
+      eventHandlers:
+        - event: TaxReceived(uint256)
+          handler: handleRewardTaxReceived
+        - event: DividendsDistributed(uint256,uint256)
+          handler: handleDividendsDistributed
+        - event: RewardClaimed(indexed address,uint256)
+          handler: handleRewardClaimed
+
+  # ─── BurnModule (type 1) ───────────────────────────────────────────
+  - kind: ethereum
+    name: BurnModule
+    network: bsc
+    source:
+      abi: BurnModule
+    mapping:
+      kind: ethereum/events
+      apiVersion: 0.0.9
+      language: wasm/assemblyscript
+      file: ./src/burnModule.ts
+      entities: [Module, BurnExecution]
+      abis:
+        - name: BurnModule
+          file: ./abis/BurnModule.json
+      eventHandlers:
+        - event: BurnExecuted(uint256,uint256,uint256)
+          handler: handleBurnExecuted
+        - event: IntervalUpdated(uint256,uint256)
+          handler: handleBurnIntervalUpdated
+
+  # ─── LiquidityModule (type 2) ──────────────────────────────────────
+  - kind: ethereum
+    name: LiquidityModule
+    network: bsc
+    source:
+      abi: LiquidityModule
+    mapping:
+      kind: ethereum/events
+      apiVersion: 0.0.9
+      language: wasm/assemblyscript
+      file: ./src/liquidityModule.ts
+      entities: [Module, LiquidityInjection]
+      abis:
+        - name: LiquidityModule
+          file: ./abis/LiquidityModule.json
+      eventHandlers:
+        - event: LiquidityAdded(uint256,uint256,uint256,uint256)
+          handler: handleLiquidityAdded
+        - event: IntervalUpdated(uint256,uint256)
+          handler: handleLiquidityIntervalUpdated
+
+  # ─── FlatCurve (one per raise) ─────────────────────────────────────
+  - kind: ethereum
+    name: FlatCurve
+    network: bsc
+    source:
+      abi: FlatCurve
+    mapping:
+      kind: ethereum/events
+      apiVersion: 0.0.9
+      language: wasm/assemblyscript
+      file: ./src/flatCurve.ts
+      entities: [Raise, Contribution]
+      abis:
+        - name: FlatCurve
+          file: ./abis/FlatCurve.json
+      eventHandlers:
+        - event: ContributionMade(indexed address,uint256,uint256,uint256)
+          handler: handleContributionMade
+        - event: ContributionRefunded(indexed address,uint256)
+          handler: handleContributionRefunded
+        - event: RaiseLaunched(indexed address,uint256,uint256,uint256,uint256)
+          handler: handleRaiseLaunched
+        - event: RaiseFailed(indexed address,uint256)
+          handler: handleRaiseFailed
+        - event: TokensClaimed(indexed address,uint256)
+          handler: handleTokensClaimed

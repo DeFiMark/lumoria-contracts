@@ -1,0 +1,347 @@
+# Lumoria subgraph schema. Mirrors docs/SUBGRAPH.md §6.
+# Mutable entities use `@entity`; append-only/log entities use `@entity(immutable: true)`.
+
+type Token @entity {
+  id: ID! # token address
+  creator: Bytes!
+  taxHandler: Bytes!
+  poolId: Bytes # from LumoriaPoolInitialized
+  name: String!
+  symbol: String!
+  decimals: Int!
+  launchMode: Int! # 0 BYOL, 1 FlatCurve
+  launchedAt: BigInt!
+  launchTx: Bytes!
+  buyFee: BigInt! # current (FeesUpdated)
+  sellFee: BigInt!
+  renounced: Boolean! # true after ManagementRenounced (B6)
+  renouncedAt: BigInt # timestamp of renounce (null until then)
+  totalSupply: BigInt!
+  holderCount: Int! # EXCLUDES PoolManager + 0x0
+  totalVolumeBnb: BigInt! # all routes
+  attributedVolumeBnb: BigInt! # only hookData-attributed
+  buyCount: BigInt!
+  sellCount: BigInt!
+  totalPlatformFeeBnb: BigInt!
+  totalTaxBnb: BigInt!
+  totalLiquidityLocked: BigInt! # vault totalLocked (V4 units)
+  lastPriceBnb: BigDecimal! # last trade price (organic)
+  pendingFeeChange: PendingChange
+  pendingModuleChange: PendingChange
+  rebate: Rebate
+  raise: Raise
+  modules: [Module!]! @derivedFrom(field: "token")
+  trades: [Trade!]! @derivedFrom(field: "token")
+  holders: [Holder!]! @derivedFrom(field: "token")
+  feeHistory: [FeeChange!]! @derivedFrom(field: "token")
+  moduleHistory: [ModuleEvent!]! @derivedFrom(field: "token")
+  allocations: [TokenAllocation!]! @derivedFrom(field: "token")
+  vestingSchedules: [VestingSchedule!]! @derivedFrom(field: "token")
+}
+
+# Creator allocations carved from the remainder at launch (Generator).
+type TokenAllocation @entity(immutable: true) {
+  id: ID! # tx-hash:log-index
+  token: Token!
+  beneficiary: Bytes!
+  amount: BigInt!
+  locked: Boolean! # false = AllocationMinted (immediate), true = AllocationVested
+  schedule: VestingSchedule # set only when locked
+  createdAt: BigInt!
+}
+
+# A vested allocation held in the shared VestingVault (linear + cliff, non-revocable).
+type VestingSchedule @entity {
+  id: ID! # VestingVault schedule id (uint256, stringified)
+  token: Token!
+  beneficiary: Bytes!
+  user: User!
+  total: BigInt!
+  released: BigInt! # exact from TokensReleased; "releasable" is time-derived
+  start: BigInt!
+  cliff: BigInt! # seconds after start
+  duration: BigInt! # seconds
+  createdAt: BigInt!
+  releases: [VestingRelease!]! @derivedFrom(field: "schedule")
+}
+
+type VestingRelease @entity(immutable: true) {
+  id: ID! # tx-hash:log-index
+  schedule: VestingSchedule!
+  beneficiary: Bytes!
+  amount: BigInt!
+  timestamp: BigInt!
+}
+
+type Holder @entity {
+  id: ID! # token-addr:holder-addr
+  token: Token!
+  user: User!
+  address: Bytes!
+  balance: BigInt!
+  isPool: Boolean! # true for the PoolManager
+  firstSeen: BigInt!
+  lastSeen: BigInt!
+}
+
+type User @entity {
+  id: ID! # user address
+  holdings: [Holder!]! @derivedFrom(field: "user")
+  vestingSchedules: [VestingSchedule!]! @derivedFrom(field: "user")
+}
+
+type Trade @entity(immutable: true) {
+  id: ID! # tx-hash:log-index
+  token: Token!
+  trader: Bytes! # 0x0 if unattributed
+  attributed: Boolean!
+  isModuleFlow: Boolean! # buyer/seller is a known module — EXCLUDE from OHLC + organic volume
+  kind: String! # "buy" | "sell"
+  bnbIn: BigInt
+  bnbOut: BigInt
+  tokensIn: BigInt
+  tokensOut: BigInt
+  platformFee: BigInt!
+  taxTaken: BigInt!
+  priceBnbPerToken: BigDecimal!
+  rebateCredited: BigInt
+  timestamp: BigInt!
+  blockNumber: BigInt!
+  txHash: Bytes!
+}
+
+type Module @entity {
+  id: ID! # module address
+  token: Token!
+  taxHandler: Bytes!
+  moduleType: Int! # 0..3
+  buyAllocation: BigInt!
+  sellAllocation: BigInt!
+  active: Boolean!
+  addedAt: BigInt!
+  totalReceivedBnb: BigInt!
+  rewardToken: Bytes # Reward
+  totalDividendsDistributed: BigInt # Reward
+  minDistribution: BigInt # Reward (call-hydrated)
+  totalBurned: BigInt # Burn
+  totalBnbSpent: BigInt # Burn
+  totalLpLocked: BigInt # Liquidity (V4 units)
+  recipient: Bytes # Creator (current; rotates)
+  interval: BigInt # Burn/Liquidity (call-hydrated; then IntervalUpdated)
+  lastExecuted: BigInt # Burn/Liquidity
+  forwards: [CreatorFeeForward!]! @derivedFrom(field: "module")
+}
+
+type PendingChange @entity {
+  id: ID! # token addr + "-fee" | "-module"
+  token: Token!
+  kind: String! # "fee" | "module"
+  newBuyFee: BigInt
+  newSellFee: BigInt
+  changeType: Int # module: 0 ADD 1 REMOVE 2 UPDATE
+  moduleType: Int
+  rebalanceIndices: [BigInt!]
+  rebalanceBuyAllocs: [BigInt!]
+  rebalanceSellAllocs: [BigInt!]
+  effectiveTime: BigInt!
+  proposedAt: BigInt!
+  proposedTx: Bytes!
+  status: String! # "pending" | "executed" | "cancelled"
+}
+
+type FeeChange @entity(immutable: true) {
+  id: ID! # tx-hash:log-index
+  token: Token!
+  oldBuyFee: BigInt!
+  newBuyFee: BigInt!
+  oldSellFee: BigInt!
+  newSellFee: BigInt!
+  kind: String! # "instant" | "timelocked"
+  timestamp: BigInt!
+}
+
+type ModuleEvent @entity(immutable: true) {
+  id: ID! # tx-hash:log-index
+  token: Token!
+  kind: String! # "added"|"removed"|"updated"|"proposed"|"cancelled"
+  module: Bytes
+  moduleType: Int
+  buyAllocation: BigInt
+  sellAllocation: BigInt
+  timestamp: BigInt!
+}
+
+type RewardClaim @entity(immutable: true) {
+  id: ID!
+  module: Module!
+  holder: Bytes!
+  amount: BigInt!
+  timestamp: BigInt!
+}
+
+type BurnExecution @entity(immutable: true) {
+  id: ID!
+  module: Module!
+  bnbSpent: BigInt!
+  tokensBurned: BigInt!
+  timestamp: BigInt!
+}
+
+type LiquidityInjection @entity(immutable: true) {
+  id: ID!
+  module: Module!
+  bnbAmount: BigInt!
+  tokenAmount: BigInt!
+  liquidity: BigInt!
+  timestamp: BigInt!
+}
+
+type CreatorFeeForward @entity(immutable: true) {
+  id: ID!
+  module: Module!
+  recipient: Bytes!
+  amount: BigInt!
+  timestamp: BigInt!
+}
+
+type Rebate @entity {
+  id: ID! # token addr
+  token: Token!
+  creator: Bytes!
+  rebateBps: BigInt!
+  fundedBalance: BigInt! # decremented by RebateCredited too
+  active: Boolean!
+  totalCreditedTokens: BigInt!
+  credits: [RebateCredit!]! @derivedFrom(field: "rebate")
+}
+
+type RebateCredit @entity(immutable: true) {
+  id: ID! # tx-hash:log-index
+  rebate: Rebate!
+  token: Token!
+  buyer: Bytes!
+  amount: BigInt!
+  timestamp: BigInt!
+}
+
+type Raise @entity {
+  id: ID! # flatCurve address
+  token: Token!
+  flatCurve: Bytes!
+  hardCap: BigInt!
+  totalRaised: BigInt!
+  contributorCount: Int!
+  startTime: BigInt!
+  endTime: BigInt!
+  minContribution: BigInt!
+  maxContribution: BigInt!
+  tokensForPresale: BigInt!
+  tokensForLP: BigInt!
+  status: String! # "ACTIVE" | "SUCCESS" | "FAILED"
+  liquidityBnb: BigInt
+  creatorBnb: BigInt
+  contributions: [Contribution!]! @derivedFrom(field: "raise")
+}
+
+type Contribution @entity {
+  id: ID! # raise-addr:contributor
+  raise: Raise!
+  contributor: Bytes!
+  grossContributed: BigInt!
+  netContributed: BigInt!
+  refunded: BigInt!
+  claimed: BigInt!
+}
+
+type UserVolume @entity {
+  id: ID! # token-addr:user-addr
+  token: Token!
+  user: Bytes!
+  volumeBnb: BigInt! # attributed only
+}
+
+type TokenDayData @entity {
+  id: ID! # token-addr:dayStartUnix
+  token: Token!
+  date: Int!
+  open: BigDecimal!
+  high: BigDecimal!
+  low: BigDecimal!
+  close: BigDecimal!
+  volumeBnb: BigInt!
+  txCount: BigInt!
+}
+
+type TokenHourData @entity {
+  id: ID! # token-addr:hourStartUnix
+  token: Token!
+  periodStart: Int!
+  open: BigDecimal!
+  high: BigDecimal!
+  low: BigDecimal!
+  close: BigDecimal!
+  volumeBnb: BigInt!
+  txCount: BigInt!
+}
+
+type TokenMinuteData @entity {
+  id: ID! # token-addr:minuteBucketUnix (5-min buckets)
+  token: Token!
+  periodStart: Int!
+  open: BigDecimal!
+  high: BigDecimal!
+  low: BigDecimal!
+  close: BigDecimal!
+  volumeBnb: BigInt!
+  txCount: BigInt!
+}
+
+type PlatformConfig @entity {
+  id: ID! # "1"
+  platformFeeBps: BigInt!
+  totalFeesReceivedBnb: BigInt!
+  totalTokens: Int!
+  totalVolumeBnb: BigInt!
+  creatorCount: Int!
+}
+
+type PlatformDayData @entity {
+  id: ID! # dayStartUnix
+  date: Int!
+  volumeBnb: BigInt!
+  feesBnb: BigInt!
+  newTokens: Int!
+}
+
+type HolderDayData @entity {
+  id: ID! # holder-addr:token-addr:dayStartUnix
+  holder: Bytes!
+  token: Token!
+  date: Int!
+  balance: BigInt!
+}
+
+# Tracks which addresses are Lumoria modules, so the hook handler can flag
+# module-recursion trades (isModuleFlow) without a contract call.
+type ModuleAddress @entity {
+  id: ID! # module address
+  token: Token!
+  moduleType: Int!
+}
+
+# Tracks creator → distinct-token count so PlatformConfig.creatorCount only
+# increments on a creator's FIRST launch.
+type Creator @entity {
+  id: ID! # creator address
+  tokenCount: Int!
+}
+
+# Infra addresses resolved once from the Database, so token.ts can exclude
+# the PoolManager / Generator / VestingVault from holderCount without a call
+# on every Transfer.
+type SystemAddresses @entity {
+  id: ID! # "1"
+  poolManager: Bytes!
+  generator: Bytes!
+  vestingVault: Bytes!
+}

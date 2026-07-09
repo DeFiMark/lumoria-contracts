@@ -1,0 +1,21 @@
+{
+  "name": "lumoria-subgraph",
+  "version": "1.0.0",
+  "description": "The Graph subgraph for the Lumoria launchpad (Uniswap V4 + LumoriaHook) on BNB Chain.",
+  "license": "MIT",
+  "scripts": {
+    "extract-abis": "node scripts/extract-abis.js",
+    "gen-networks": "node scripts/gen-networks.js",
+    "precodegen": "node scripts/extract-abis.js",
+    "codegen": "graph codegen",
+    "build": "graph build --network bsc",
+    "build:local": "graph build",
+    "deploy:studio": "graph deploy lumoria --network bsc",
+    "create:local": "graph create --node http://localhost:8020/ lumoria",
+    "deploy:local": "graph deploy --node http://localhost:8020/ --ipfs http://localhost:5001 lumoria"
+  },
+  "dependencies": {
+    "@graphprotocol/graph-cli": "^0.80.0",
+    "@graphprotocol/graph-ts": "^0.35.1"
+  }
+}

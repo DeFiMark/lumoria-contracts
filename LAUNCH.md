@@ -72,9 +72,9 @@ Validates the deploy + a real launch/buy against the **actual canonical V4 PoolM
 - [x] **Spec doc** — `docs/SUBGRAPH.md`: every contract, every event, relationships, entities, handler guidance, gotchas. Now includes the `VestingVault` data source, `Generator` allocation events, `TaxHandler.ManagementRenounced`, and the A1–A4 aggregate entities.
 - [x] **Frontend-agent review folded in** — first pass found no gaps; the follow-up **drift audit** (`docs/CONTRACTS_SUBGRAPH_DRIFT_REPORT.md`) surfaced three real contract gaps (vesting, allocations, renounce), now **built**, plus a set of already-shipped-but-mis-documented capabilities and cheap subgraph aggregates. All resolved in `docs/CONTRACTS_DRIFT_RESOLUTION.md`; subgraph priorities in `SUBGRAPH.md §11`.
 - [x] **Deploy-block recording** — `deploy-base.js` now writes `startBlock` for the manifest.
-- [ ] Scaffold the subgraph against the doc (datasources + dynamic templates + schema + mappings) — start with the `SUBGRAPH.md §11` must-haves.
+- [x] **Scaffold the subgraph** — full implementation in `subgraph/` (7 singleton data sources + 7 dynamic templates + schema + 14 mappings), built from `SUBGRAPH.md`. **`graph codegen` + `graph build` both pass** (every event signature matches the compiled ABIs; all mappings compile to wasm).
 - [ ] Index a fork/testnet deployment; validate the queries the UI needs (token list, trades/OHLC, holders, rewards, raises, rebates, volume).
-- [ ] Deploy the subgraph (point at `deployments/bsc.json` addresses + `startBlock`) after mainnet deploy.
+- [ ] Deploy the subgraph: after mainnet deploy, `cd subgraph && npm i && npm run gen-networks && npm run build && npm run deploy:studio` (reads `deployments/bsc.json` addresses + `startBlock`).
 
 ## 5. Frontend Integration (⬜ — can run parallel with audit)
 
