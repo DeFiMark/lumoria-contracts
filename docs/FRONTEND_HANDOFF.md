@@ -244,7 +244,7 @@ If a datum you need is in an event below but NOT yet an entity field in Appendix
 
 - **Database**: `TokenRegistered(token, creator, taxHandler)`, `VolumeRegistered(token, user, amount)`, `PlatformFeeUpdated(old, new)`, `ModuleMasterCopySet(type, copy)`, `MasterCopyUpdated(copyType, newCopy)`, `{Generator,Router,PoolManager,Hook,LiquidityVault,FeeReceiver,RebateContract}Updated(old, new)`.
 - **Generator**: `ProjectGenerated(token, taxHandler, creator, name, symbol, buyFee, sellFee, launchMode)`, `BYOLLaunched(token, platformFee, tokensForLP, bnbForLP)`, `FlatCurveLaunched(token, flatCurve, hardCap)`.
-- **LumoriaHook** (every trade, any router): `TokenPurchased(token, buyer, bnbIn, platformFee, taxTaken, tokensOut)`, `TokenSold(token, seller, tokensIn, platformFee, taxTaken, bnbOut)`, `LumoriaPoolInitialized(token, poolId)`.
+- **LumoriaHook** (every trade, any router): `TokenPurchased(token, buyer, bnbIn, platformFee, taxTaken, tokensOut, sqrtPriceX96, tick)`, `TokenSold(token, seller, tokensIn, platformFee, taxTaken, bnbOut, sqrtPriceX96, tick)`, `LumoriaPoolInitialized(token, poolId)`. The trailing `sqrtPriceX96`/`tick` are the post-swap pool mark — the OHLC source.
 - **LiquidityVault**: `PoolInitialized(token, poolId, sqrtPriceX96)`, `LiquidityLocked(token, bnbAmount, tokenAmount, liquidity, totalLocked)`.
 - **FeeReceiver**: `FeeReceived(from, amount)`, `TokenFeeReceived(token, amount)`, `FeesWithdrawn(recipient, amount)`, `RecipientUpdated(old, new)`.
 - **TaxHandler** (per token): `BuyTaxDistributed(token, amount, buyer=0x0)`, `SellTaxDistributed(token, amount, seller=0x0)`, `ShareUpdated(holder, old, new)`, `ModuleAdded(type, addr, buyAlloc, sellAlloc)`, `ModuleRemoved(type, addr)`, `ModuleUpdated(type, addr, buyAlloc, sellAlloc)`, `FeesUpdated(oldBuy, newBuy, oldSell, newSell)`, `FeeChangeProposed(newBuy, newSell, effectiveTime)`, `FeeChangeCancelled()`, `ModuleChangeProposed(changeType, type, buyAlloc, sellAlloc, effectiveTime)`, `ModuleRebalanceProposed(indices[], buyAllocs[], sellAllocs[])`, `ModuleChangeCancelled()`.
@@ -253,7 +253,7 @@ If a datum you need is in an event below but NOT yet an entity field in Appendix
 - **RewardModule**: `TaxReceived(amount)`, `DividendsDistributed(rewardAmount, bnbSpent)`, `RewardClaimed(holder, amount)`, `ShareUpdated(holder, old, new)`.
 - **BurnModule**: `TaxReceived(amount, pendingBNB)`, `BurnExecuted(bnbSpent, tokensBurned, timestamp)`, `IntervalUpdated(old, new)`.
 - **LiquidityModule**: `TaxReceived(amount, pendingBNB)`, `LiquidityAdded(bnbAmount, tokenAmount, lpTokens, timestamp)`, `IntervalUpdated(old, new)`.
-- **CreatorFeeModule**: `TaxForwarded(recipient, amount)`, `RecipientUpdated(old, new)`.
+- **CreatorFeeModule**: `TaxAccrued(recipient, amount, owedAfter)`, `TaxWithdrawn(recipient, amount)`, `RecipientUpdated(old, new)`. **Fees now ACCRUE, not push** — the recipient must call `withdraw()`. Reads: `owed(address)` = claimable, `totalAccrued` = lifetime earned, `totalPaid` = lifetime withdrawn.
 - **FlatCurve**: `ContributionMade(contributor, gross, net, totalRaised)`, `ContributionRefunded(contributor, refund)`, `PlatformFeeTaken(amount)`, `RaiseLaunched(token, totalRaised, liquidityBNB, liquidityTokens, creatorBNB)`, `RaiseFailed(token, totalRaised)`, `TokensClaimed(contributor, tokenAmount)`.
 
 ---

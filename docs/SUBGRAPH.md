@@ -22,7 +22,7 @@ Lumoria is a **factory system**: a handful of singletons, plus per-launch contra
 | `FeeReceiver` | singleton | `core.feeReceiver` | — | platform revenue |
 | `RebateContract` | singleton | `core.rebateContract` | — | rebate pools + credits |
 | `VestingVault` | singleton | `core.vestingVault` | — | vested creator allocations (schedules + releases) |
-| Uniswap V4 `PoolManager` | singleton (canonical) | `v4.poolManager` | — | **optional** — raw `Swap` for OHLC (filter by our PoolIds) |
+| Uniswap V4 `PoolManager` | singleton (canonical) | `v4.poolManager` | — | **not indexed** — the hook emits `sqrtPriceX96`/`tick` itself (§13.1) |
 | `LumoriaToken` | **template** | from event | `Database.TokenRegistered` | Transfer (holders, supply) |
 | `TaxHandler` | **template** | from event | `Database.TokenRegistered` | fees, modules, tax flow, shares |
 | `FlatCurve` | **template** | from event | `Generator.FlatCurveLaunched` | raise lifecycle |
@@ -101,7 +101,16 @@ You **do not need to compute it** — the subgraph receives `PoolId` directly:
 
 Build a **`poolId → token` map** from these so you can attribute canonical `PoolManager.Swap(id, …)` events (keyed by `id = PoolId`) to a token if you index the PoolManager for OHLC.
 
-**Indexing the PoolManager is optional.** It's a global singleton across *all* V4 pools, so you'd filter every `Swap` by your PoolId set. Cheaper primary path: use the hook's `TokenPurchased`/`TokenSold` (they fire on the same swaps, already carry token + fee breakdown + BNB amounts, and only fire for our pools). Index `PoolManager.Swap` **only** if you want `sqrtPriceX96`-precise OHLC candles; otherwise reconstruct price from the hook events' BNB/token amounts.
+> ✅ **Settled — do NOT index the PoolManager for price.** The hook's
+> `TokenPurchased` / `TokenSold` now carry the post-swap `sqrtPriceX96` + `tick`
+> directly (`TOKENOMICS_V2.md` §13.1). One event stream gives you price, volume,
+> fee breakdown and per-user attribution, for our pools only. Convert with
+> `poolPriceBnbPerToken()` in `src/helpers.ts`:
+> `BNB per token = 2^192 / sqrtPriceX96^2` (currency0 = BNB, currency1 = token, both 18dp).
+> Candles are built from this **pool mark**, never from execution price — a
+> high-tax token would otherwise chart its own fee stack instead of its market.
+
+**Indexing the PoolManager is now unnecessary.** It's a global singleton across *all* V4 pools, so you'd filter every `Swap` by your PoolId set. Cheaper primary path: use the hook's `TokenPurchased`/`TokenSold` (they fire on the same swaps, already carry token + fee breakdown + BNB amounts, and only fire for our pools). Index `PoolManager.Swap` **only** if you want `sqrtPriceX96`-precise OHLC candles; otherwise reconstruct price from the hook events' BNB/token amounts.
 
 ---
 
@@ -212,7 +221,8 @@ Spawn the matching template in the `ModuleAdded` handler (and via call-hydration
 **CreatorFeeModule (type 3):**
 | Event | Signature | Use |
 |---|---|---|
-| `TaxForwarded` | `(address indexed recipient, uint256 amount)` | per-recipient earnings; `Module.totalReceived` |
+| `TaxAccrued` | `(address indexed recipient, uint256 amount, uint256 owedAfter)` | per-recipient earnings; `Module.totalReceivedBnb`; `CreatorFeeAccrual` |
+| `TaxWithdrawn` | `(address indexed recipient, uint256 amount)` | payouts; `Module.totalWithdrawnBnb`; `CreatorFeeWithdrawal` |
 | `RecipientUpdated` | `(address indexed oldRecipient, address indexed newRecipient)` | fee-stream ownership transfer |
 
 **RewardModule (type 0):**
@@ -385,7 +395,8 @@ type Module @entity {
     sellAllocation: BigInt!
     active: Boolean!
     addedAt: BigInt!
-    totalReceivedBnb: BigInt!     # sum TaxReceived/TaxForwarded
+    totalReceivedBnb: BigInt!     # sum TaxReceived/TaxAccrued
+    totalWithdrawnBnb: BigInt!    # sum TaxWithdrawn (Creator)
     # type-specific:
     rewardToken: Bytes            # Reward
     totalDividendsDistributed: BigInt  # Reward
@@ -600,7 +611,7 @@ dataSources:
 templates:
   - LumoriaToken        # Transfer (+ Approval)
   - TaxHandler          # fees + module + share + tax-distributed events + ManagementRenounced
-  - CreatorFeeModule    # TaxForwarded, RecipientUpdated
+  - CreatorFeeModule    # TaxAccrued, TaxWithdrawn, RecipientUpdated
   - RewardModule        # TaxReceived, DividendsDistributed, RewardClaimed, ShareUpdated
   - BurnModule          # TaxReceived, BurnExecuted, IntervalUpdated
   - LiquidityModule     # TaxReceived, LiquidityAdded, IntervalUpdated

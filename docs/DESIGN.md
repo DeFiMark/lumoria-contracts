@@ -650,7 +650,7 @@ Storage:
 Flow:
 1. Receives BNB from TaxHandler via receiveTax()
 2. Accumulates BNB until burn interval passes
-3. Anyone can call executeBurn() after interval
+3. `executeBurn(minTokensOut, deadline)` after the interval. minTokensOut MUST be > 0. Execution authority comes from the platform operator registry (`Database.isOperator`): permissionless while `operatorCount == 0`; otherwise operator-first with a 1h public fallback.
 4. Buys tokens via Router, sends to dead address (or calls burn)
 5. Interval prevents sandwich attacks on large burns
 
@@ -676,7 +676,7 @@ Storage:
 Flow:
 1. Receives BNB from TaxHandler
 2. Accumulates until interval passes
-3. Anyone can call executeLiquidity() after interval
+3. `executeLiquidity(minTokensOut, minTokenLP, minBnbLP, deadline)` after the interval. minTokensOut MUST be > 0. Same platform-operator gate as BurnModule.
 4. Uses half of BNB to buy tokens
 5. Pairs bought tokens + remaining BNB
 6. Adds full-range liquidity via Router → LiquidityVault
@@ -697,16 +697,19 @@ Storage:
 - taxHandler: inferred from msg.sender at __init__ time
 - totalPaid
 
-Flow:
-1. Receives BNB from TaxHandler
-2. Immediately forwards to `recipient` via TransferHelper.safeTransferETH
+Flow (ACCRUE-AND-PULL — see docs/TOKENOMICS_V2.md §7.2):
+1. Receives BNB from TaxHandler; credits `owed[recipient]`. No transfer, no external call.
+2. The recipient later calls `withdraw()` to pull the accrued balance.
 
 Events:
-- TaxForwarded(recipient, amount)
+- TaxAccrued(recipient, amount, owedAfter)
+- TaxWithdrawn(recipient, amount)
 - RecipientUpdated(oldRecipient, newRecipient)
 ```
 
-**Multiple instances per token (arbitrary fee-recipient wallets).** TaxHandler does not enforce uniqueness on `moduleType`, so a creator can stack N CreatorFeeModule instances in the initial `modules[]` array (subject to MAX_MODULES=10), each with its own recipient and allocation. This is the canonical way to support "team wallet + marketing wallet + treasury + …" splits without writing a new module type. Recipients can also be contracts with custom `receive()` logic — but note that any reverting/expensive `receive()` will fail every trade, so the frontend should warn when adding a contract recipient. Names for recipients are not stored on-chain (waste of gas); the frontend keeps a `(token, moduleIndex) → label` mapping off-chain.
+**Why pull, not push.** An earlier version forwarded BNB inside `receiveTax()` via `TransferHelper.safeTransferETH`, which does `require(success)`. Because `receiveTax()` runs inside the V4 swap callback, a recipient contract without a payable `receive()` — or with a reverting/expensive one — reverted **every trade of the token**. Under accrue-and-pull, `receiveTax()` cannot fail and only the recipient's own `withdraw()` does. Balances are keyed by account, so rotating the recipient leaves the previous one's accrual claimable.
+
+**Multiple instances per token (arbitrary fee-recipient wallets).** TaxHandler does not enforce uniqueness on `moduleType`, so a creator can stack N CreatorFeeModule instances in the initial `modules[]` array (subject to MAX_MODULES=10), each with its own recipient and allocation. This is the canonical way to support "team wallet + marketing wallet + treasury + …" splits without writing a new module type. Recipients may be contracts; since payouts are pulled, a contract recipient can no longer endanger trading. Names for recipients are not stored on-chain (waste of gas); the frontend keeps a `(token, moduleIndex) → label` mapping off-chain.
 
 ### Module Interface
 ```solidity
@@ -982,7 +985,7 @@ No pool registry is stored anywhere — `LumoriaHook.poolKeyFor(token)` / `poolI
 | `beforeRemoveLiquidity` | **Always reverts** (`LiquidityPermanentlyLocked`). |
 | `beforeDonate` | Always reverts (donations would accrue to the locked position, i.e. be burned by accident). |
 | `beforeSwap` | Reverts exactOutput. On buys: takes platform fee + buy tax from the BNB input via `poolManager.take()`, forwards immediately (FeeReceiver / `TaxHandler.receiveBuyTax`), returns a `BeforeSwapDelta` so only the remainder swaps. |
-| `afterSwap` | On sells: takes platform fee + sell tax from the gross BNB output, forwards, returns the `int128` hook delta. On buys: credits rebate + registers volume. Emits `TokenPurchased` / `TokenSold` (same shapes as the legacy Router events). |
+| `afterSwap` | On sells: takes platform fee + sell tax from the gross BNB output, forwards, returns the `int128` hook delta. On buys: credits rebate + registers volume. Emits `TokenPurchased` / `TokenSold`, each carrying the post-swap `sqrtPriceX96` + `tick` read from the PoolManager — one extsload, no storage, so the subgraph never has to index the canonical PoolManager for price (TOKENOMICS_V2 §13.1). |
 
 ### Fee math (identical to the legacy Router)
 `platformFee = gross × platformFeeBps / 10000`, then `tax = (gross − platformFee) × buyFee|sellFee / 10000`. Buys measure `gross` as the BNB input; sells as the gross BNB output.
@@ -998,7 +1001,7 @@ Permissions live in the low 14 bits of the hook's address, so it is deployed via
 
 ### Hook Events
 ```
-event TokenPurchased(address indexed token, address indexed buyer, uint256 bnbIn, uint256 platformFee, uint256 taxTaken, uint256 tokensOut);
+event TokenPurchased(address indexed token, address indexed buyer, uint256 bnbIn, uint256 platformFee, uint256 taxTaken, uint256 tokensOut, uint160 sqrtPriceX96, int24 tick);
 event TokenSold(address indexed token, address indexed seller, uint256 tokensIn, uint256 platformFee, uint256 taxTaken, uint256 bnbOut);
 event LumoriaPoolInitialized(address indexed token, PoolId indexed poolId);
 ```
@@ -1203,7 +1206,7 @@ event AllocationVested(address indexed token, address indexed beneficiary, uint2
 - `Approval(owner, spender, value)`
 
 **LumoriaHook** (the subgraph's primary trade source — fires on EVERY swap, any router):
-- `TokenPurchased(token, buyer, bnbIn, platformFee, taxTaken, tokensOut)` — `buyer = address(0)` for unattributed third-party routes
+- `TokenPurchased(token, buyer, bnbIn, platformFee, taxTaken, tokensOut, sqrtPriceX96, tick)` — `buyer = address(0)` for unattributed third-party routes. `sqrtPriceX96`/`tick` are the **post-swap pool mark**, making the hook a complete OHLC source (TOKENOMICS_V2 §13.1).
 - `TokenSold(token, seller, tokensIn, platformFee, taxTaken, bnbOut)`
 - `LumoriaPoolInitialized(token, poolId)`
 
@@ -1254,7 +1257,8 @@ event AllocationVested(address indexed token, address indexed beneficiary, uint2
 - `BNBReceived(amount, newPending)`
 
 **CreatorFeeModule**:
-- `TaxForwarded(recipient, amount)`
+- `TaxAccrued(recipient, amount, owedAfter)`
+- `TaxWithdrawn(recipient, amount)`
 - `RecipientUpdated(oldRecipient, newRecipient)`
 
 **RebateContract**:
@@ -1314,8 +1318,8 @@ Recommended implementation sequence:
 5. ✅ `TaxHandler.sol` — per-token tax router with fee + module timelocks
 6. ✅ `CreatorFeeModule.sol` — simplest module, forwards BNB to recipient
 7. ✅ `RewardModule.sol` — holder dividend distribution (BNB + token modes)
-8. ✅ `BurnModule.sol` — buyback and burn (permissionless execute, 5-min floor)
-9. ✅ `LiquidityModule.sol` — auto-liquidity (permissionless execute, LP to dEaD)
+8. ✅ `BurnModule.sol` — buyback and burn (`executeBurn(minTokensOut, deadline)`, 5-min floor, operator-gated with 1h public fallback)
+9. ✅ `LiquidityModule.sol` — auto-liquidity (`executeLiquidity(minTokensOut, minTokenLP, minBnbLP, deadline)`, operator-gated with 1h public fallback, liquidity vault-locked)
 
 ### Phase 3: DEX Refactor ✅ COMPLETE
 10. ✅ `Factory.sol` — curated-only enforcement, 0.1% LP fee, Database-aware WBNB pairing

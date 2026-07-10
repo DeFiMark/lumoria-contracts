@@ -94,7 +94,7 @@ Fee and module edits are **not instant**. `TaxHandler` ships a 24h timelock you 
 Per-token rewards are claimed from the RewardModule, not from any platform token.
 
 - **Read:** `RewardModule.getUnpaidRewards(address holder) → uint256` (live claimable BNB, or reward-token in token-mode).
-- **Write:** holders claim via the module's claim path; `triggerDistribution()` is public (anyone can poke a pending distribution).
+- **Write:** holders claim via the module's claim path; `processRewards()` is public (anyone can poke a pending BNB-mode distribution). Token-mode conversion is `convertAndDistribute(minOut, deadline)`, operator-gated — see `TOKENOMICS_V2.md` §6.3.
 - **Event:** `RewardClaimed` (→ subgraph `RewardClaim`).
 - **UI:** wire the Portfolio "Claimable / rewards" tiles to `getUnpaidRewards` + `RewardClaim` history. (This replaces the cut "PXX" concept — see B9.)
 

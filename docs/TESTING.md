@@ -104,6 +104,9 @@ Modules infer `taxHandler` from `msg.sender` at `__init__` — payloads don't ca
 - `buildRewardInitData({ token, rewardToken?, externalRouter?, externalWBNB?, minDistribution? })`
 - `buildBurnInitData({ token, database, burnInterval })`
 - `buildLiquidityInitData({ token, database, liquidityInterval })`
+- `farDeadline()` — far-future deadline for `executeBurn` / `executeLiquidity` / `convertAndDistribute`, which take `(minOut…, deadline)`. `processRewards()` takes none — it never swaps.
+
+Operators are **platform-wide**, not part of any init payload: `database.setOperator(addr, true)` (owner only). `deployBase()` registers none, so module execution is permissionless in tests unless a test opts in.
 
 ### V4 helpers
 - `poolKeyFor(base, tokenAddr)` / `poolIdFor(base, tokenAddr)` — the canonical pool identity (deterministic; no registry).
@@ -138,12 +141,12 @@ Modules infer `taxHandler` from `msg.sender` at `__init__` — payloads don't ca
 | `Database.sol` | ✅ | ✅ | admin (incl. poolManager/hook/vault setters), registry, hook-gated volume (zero-user skip), master copies |
 | `FeeReceiver.sol` | ✅ | — | receive / receiveFee / withdraw / setRecipient |
 | `LumoriaToken.sol` | ✅ | ✅ | init, transfer, approve/transferFrom, burn, setShare forwarding, **pair-exclusion** (pair = PoolManager) |
-| `TaxHandler.sol` | ✅ | ✅ | init, fee timelock, batch module proposals, distribution math, setShare, **renounceManagement freeze (B6)**, **vesting-vault share exclusion** |
-| `CreatorFeeModule.sol` | ✅ | ✅ | init (taxHandler from msg.sender), receiveTax forwarding, setRecipient |
-| `RewardModule.sol` | ✅ | ✅ | BNB mode + token mode (external router = LumoriaSwapRouter over V4) |
-| `BurnModule.sol` | ✅ | ✅ | config + guards + end-to-end `executeBurn` via a real V4 swap |
-| `LiquidityModule.sol` | ✅ | ✅ | config + guards + end-to-end `executeLiquidity` (vault-locked liquidity) |
-| `v4/LumoriaHook.sol` | ✅ | ✅ | buy/sell fee math to the wei, 98% + 0% taxes, multi-pool isolation, exactOut rejection, **bypass-proofing via raw PoolManager swaps**, pool-creation/liquidity/donate gates, rebate + volume attribution |
+| `TaxHandler.sol` | ✅ | ✅ | init, fee timelock (**incl. §7.6 pending-disarm regression + §7.7 per-change increase cap**), batch module proposals, distribution math, setShare, **renounceManagement freeze (B6)**, **share-exclusion set (V2 §7.3)**, **dust sweep skips 0-bps modules (V2 §7.5)** |
+| `CreatorFeeModule.sol` | ✅ | ✅ | init (taxHandler from msg.sender), **accrue-and-pull `receiveTax`/`withdraw` (V2 §7.2)**, recipient rotation keeps old accrual claimable, **regression: contract recipient with no `receive()` cannot brick trading** |
+| `RewardModule.sol` | ✅ | ✅ | BNB mode + token mode (external router = LumoriaSwapRouter over V4), **`donate()` (V2 §4.1)**, **`sync()` backfill (V2 §4.2)**, **regression: token-mode `receiveTax` never calls the external router (V2 §7.1)** |
+| `BurnModule.sol` | ✅ | ✅ | config + guards + end-to-end `executeBurn` via a real V4 swap, **slippage floor + deadline + operator window & liveness fallback (V2 §6.2)**, **buyback tax re-enters `receiveTax` and terminates** |
+| `LiquidityModule.sol` | ✅ | ✅ | config + guards + end-to-end `executeLiquidity` (vault-locked liquidity), **slippage floors + deadline (V2 §6.2)** |
+| `v4/LumoriaHook.sol` | ✅ | ✅ | **post-swap `sqrtPriceX96`/`tick` on both trade events, with the exact `2^192/sqrt^2` price formula pinned numerically**, buy/sell fee math to the wei, 98% + 0% taxes, multi-pool isolation, exactOut rejection, **bypass-proofing via raw PoolManager swaps**, pool-creation/liquidity/donate gates, rebate + volume attribution |
 | `v4/LumoriaLiquidityVault.sol` | ✅ | ✅ | router-only entry, lazy pool init at implied price, locked-liquidity growth, dust refunds (implicit in module flows) |
 | `v4/LumoriaSwapRouter.sol` | ✅ | ✅ | buy/sell exactIn, amountOutMin + deadline guards, addLiquidityETH delegation, non-Lumoria rejection |
 | `RebateContract.sol` | ✅ | ✅ | fund / topUp / credit / withdraw, silent-exit, re-activation (creditor = hook), **renounce freeze (Q1): rate/withdraw/re-fund blocked, top-up + credit stay open** |
@@ -151,9 +154,15 @@ Modules infer `taxHandler` from `msg.sender` at `__init__` — payloads don't ca
 | `FlatCurve.sol` | ✅ | ✅ | contribute / refund / launch (success + fail, V4 pool seed) / claim / withdrawOnFailure |
 | `VestingVault.sol` | ✅ | ✅ | generator-gated `createSchedule` + validations, linear+cliff vesting math, `release` (full/partial/double), permissionless poke, beneficiary index |
 
+| `Database.sol` → `randomnessProvider` | ✅ | — | default zero, owner-gated setter, `RandomnessProviderUpdated` (V2 §7.4) |
+| `Database.sol` → operator registry | ✅ | ✅ | `setOperator` owner-gated, `operatorCount` honest across redundant grants/revokes, zero-address rejected; modules gate on it (V2 §6.2) |
+| `Generator.sol` → FlatCurve exclusion | ✅ | ✅ | the launched FlatCurve is excluded from shares **before** it receives presale tokens (V2 §7.3) |
+
+**Tokenomics V2 Phase A** lives in `test/TokenomicsV2.test.js` (32 tests). It exercises the substrate changes that freeze per-token at launch, including two named regressions for bugs that could brick trading: `RevertingRouter` (§7.1) and `RejectingRecipient` (§7.2). Both mocks live in `contracts/test-mocks/`.
+
 ### Blocked — add tests once unblocked
 
-None currently. All Phase 1-5 contracts — plus the Phase-6 vesting/allocations/renounce work (incl. the rebate renounce-freeze) — are under test (**175 tests green**).
+None currently. All Phase 1-5 contracts — plus the Phase-6 vesting/allocations/renounce work (incl. the rebate renounce-freeze) and the Tokenomics-V2 Phase-A substrate changes — are under test (**217 tests green**).
 
 ---
 

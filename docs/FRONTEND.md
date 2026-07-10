@@ -47,7 +47,7 @@ Three kinds of data. The UI should always pick the cheapest correct source:
 **When to use:** history, aggregations, cross-contract joins, charts, feeds.
 
 Examples:
-- Price chart OHLC candles → aggregate the V4 PoolManager's `Swap` events (filter by our PoolIds), or reconstruct from the hook's `TokenPurchased`/`TokenSold`.
+- Price chart OHLC candles → read `sqrtPriceX96` / `tick` straight off the hook's `TokenPurchased` / `TokenSold`. **Do not index the canonical PoolManager and do not reconstruct price from trade amounts** — execution price is distorted by the fee stack. See `FRONTEND_MIGRATION_V2.md` §2b.
 - "Top tokens by 24h volume" → aggregate `TokenPurchased` / `TokenSold` from the **LumoriaHook** (fires on every swap, any router — aggregator trades included).
 - User's trade history → filter by trader address.
 - Holder list per token → from `Transfer` events on each LumoriaToken.
@@ -129,7 +129,7 @@ Per-token clean ERC20 with TaxHandler holder tracking.
 - Wallet balance → direct read with event-driven refresh.
 - Burn button → direct write.
 
-**⚠️ Gotcha:** `ITaxHandler.setShare` is called from inside `transfer` on both sender and recipient. If a future RewardModule is added post-launch, *existing holders* who haven't transacted since the add won't have their share registered in the new module. Known limitation documented in the RewardModule section.
+**⚠️ Gotcha:** `ITaxHandler.setShare` is called from inside `transfer` on both sender and recipient. A RewardModule added post-launch therefore starts blind — *existing holders* who haven't transacted since the add have no share in it. **Resolved by `RewardModule.sync(address[] holders)`** (permissionless; reads `balanceOf` directly, so a bogus list can't inflate anyone). Any UI or keeper that adds a reward module to a live token MUST call `sync` with the holder list from the subgraph.
 
 ---
 
@@ -224,13 +224,20 @@ Simplest module. Forwards BNB to a recipient.
 - `receiveTax()` payable — TaxHandler only.
 - `setRecipient(newRecipient)` — **current recipient only** (not creator). Allows selling/transferring the fee stream.
 
+- `withdraw()` — **anyone with a non-zero `owed` balance.** Pulls the caller's accrued fees. Fees are NOT pushed on trade (see below).
+
 **Events:**
 | Event | Fires when | Subgraph use |
 |---|---|---|
-| `TaxForwarded(recipient, amount)` | Every tax receipt > 0 | Per-recipient fee stream chart |
+| `TaxAccrued(recipient, amount, owedAfter)` | Every tax receipt > 0 | Per-recipient fee stream chart |
+| `TaxWithdrawn(recipient, amount)` | `withdraw()` called | Payout history |
 | `RecipientUpdated(oldRecipient, newRecipient)` | `setRecipient` called | Audit trail of fee-stream ownership |
 
-**UI surfaces:** "Creator earnings" stat on token page (direct read `totalPaid`). Recipient rotation form (visible only to current recipient).
+> ⚠️ **Changed (TOKENOMICS_V2 §7.2).** The module now **accrues** rather than forwarding. `TaxForwarded` no longer exists. Creator fees do not arrive in the wallet automatically — the recipient must call `withdraw()`. `totalPaid` now means *withdrawn*; use `totalAccrued` for lifetime earnings and `owed(address)` for the claimable balance.
+
+**Direct reads:** `owed(address) → uint256` (claimable now), `totalAccrued` (lifetime earned), `totalPaid` (lifetime withdrawn), `recipient`.
+
+**UI surfaces:** "Creator earnings" stat on token page — show *claimable* (`owed(recipient)`) next to *lifetime* (`totalAccrued`), with a **Claim** button wired to `withdraw()`. Recipient rotation form (visible only to current recipient); note that a rotation leaves the old recipient's `owed` balance claimable by them.
 
 ---
 
@@ -246,7 +253,8 @@ Dividend distribution. Two modes: BNB (`rewardToken = address(0)`) or arbitrary 
 
 **Writes:**
 - `receiveTax()` payable — TaxHandler only.
-- `triggerDistribution()` — **permissionless**, anyone can nudge a distribution once `minDistribution` threshold is met. UI can expose as a "refresh rewards" button with small BNB gas cost.
+- `processRewards()` — **permissionless, always.** BNB mode only. Pure bookkeeping: crystallizes accrued BNB into the dividend accumulator. No swap, no params. Safe to expose as a "refresh rewards" button. Reverts in token mode.
+- `convertAndDistribute(minRewardOut, deadline)` — **operator-gated**, public 1h after `lastDistributionTime`. Token mode only. Swaps accrued BNB into `rewardToken` on the external router; `minRewardOut` MUST be > 0 and should be quoted off-chain. Reverts in BNB mode. See `FRONTEND_MIGRATION_V2.md` §2.
 - `claimReward()` — user claims their unpaid.
 - `setShare(holder, amount)` — TaxHandler only.
 
@@ -254,14 +262,14 @@ Dividend distribution. Two modes: BNB (`rewardToken = address(0)`) or arbitrary 
 | Event | Fires when | Subgraph use |
 |---|---|---|
 | `TaxReceived(amount)` | Tax delivered from TaxHandler | Tax-inflow chart per module |
-| `DividendsDistributed(rewardAmount, bnbSpent)` | A distribution round crystallizes (auto in receiveTax / triggerDistribution) | Distribution cadence chart; for token-mode, `bnbSpent - rewardAmount` is the swap slippage |
+| `DividendsDistributed(rewardAmount, bnbSpent)` | A distribution round crystallizes (auto in receiveTax; or `processRewards` / `convertAndDistribute`) | Distribution cadence chart; for token-mode, `bnbSpent - rewardAmount` is the swap slippage |
 | `RewardClaimed(holder, amount)` | User claims | Per-user earnings tally |
 | `ShareUpdated(holder, oldShare, newShare)` | Mirror of TaxHandler's `ShareUpdated` | Can be ignored if TaxHandler's event is already indexed |
 
 **UI surfaces:**
 - **Holder page** ("My rewards"): per-token claimable balance — `getUnpaidRewards(msg.sender)` direct read. Claim button → `claimReward()` write. Historical claims → subgraph.
 - **Token info panel**: "Lifetime rewards distributed" / "Reward token" / "Min distribution threshold".
-- **Keeper incentive**: optional `triggerDistribution` button for anyone.
+- **Keeper incentive**: optional `processRewards` button for anyone (BNB mode). Token mode needs `convertAndDistribute` with a quoted `minRewardOut` and is operator-gated.
 
 **⚠️ Gotcha — newly-added RewardModule:** when a Reward module is added to a token post-launch, existing holders' shares aren't registered in the new module. They're only added when they next transact (triggering `setShare`). Dividend distributions during that bootstrap window will over-reward early-movers. Consider displaying a "Module just added — distributions may be uneven until all holders transact" banner for ~a day after add.
 
@@ -278,7 +286,7 @@ Buys back tokens via Lumoria Router and burns them.
 
 **Writes:**
 - `receiveTax()` payable — TaxHandler only.
-- **`executeBurn()` — permissionless**. Expose as "Trigger Burn" button. Fires gas but anyone can spin the wheel.
+- **`executeBurn(minTokensOut, deadline)`** — operator-gated for 1h after the interval elapses, then permissionless. `minTokensOut` MUST be > 0: quote via V4Quoter and apply a tolerance. A "Trigger Burn" button must quote first. See `FRONTEND_MIGRATION_V2.md` §2.
 - `setInterval(newInterval)` — creator only, bounded by `MIN_INTERVAL` (5 min floor).
 
 **Events:**
@@ -304,7 +312,7 @@ Auto-liquidity. Swaps half BNB for tokens, pairs with the other half, and locks 
 
 **Writes:**
 - `receiveTax()` payable — TaxHandler only.
-- **`executeLiquidity()` — permissionless**.
+- **`executeLiquidity(minTokensOut, minTokenLP, minBnbLP, deadline)`** — operator-gated for 1h after the interval elapses, then permissionless. `minTokensOut` MUST be > 0.
 - `setInterval(newInterval)` — creator only, `MIN_INTERVAL` floor.
 
 **Events:**
@@ -348,7 +356,7 @@ Only **exactInput** swaps work; exactOutput reverts. Quote with exactIn amounts.
 **Events to index (the subgraph's primary trade source):**
 | Event | Fires when | Subgraph use |
 |---|---|---|
-| `TokenPurchased(token, buyer, bnbIn, platformFee, taxTaken, tokensOut)` | **Every** buy on the pool — ours, Universal Router, aggregators | Primary trade feed, volume + price charts. `buyer = address(0)` when the route carried no hookData |
+| `TokenPurchased(token, buyer, bnbIn, platformFee, taxTaken, tokensOut, sqrtPriceX96, tick)` | **Every** buy on the pool — ours, Universal Router, aggregators | Primary trade feed, volume + **exact OHLC**. `sqrtPriceX96`/`tick` are the post-swap pool mark. `buyer = address(0)` when the route carried no hookData |
 | `TokenSold(token, seller, tokensIn, platformFee, taxTaken, bnbOut)` | Every sell | Same |
 | `LumoriaPoolInitialized(token, poolId)` | Pool created at launch | Link `Token` ↔ `poolId` |
 
@@ -597,8 +605,8 @@ High-level user stories, mapped to reads / writes / subgraph.
 
 ### 3.5 Keeper / public utility flows
 
-- **Burn/Liquidity triggers**: any user can call `executeBurn` / `executeLiquidity` once the interval has elapsed. UI shows a "Trigger now" button with gas estimate.
-- **Reward distribution triggers**: `RewardModule.triggerDistribution()` — useful when a holder wants to crystallize before claiming.
+- **Burn/Liquidity triggers**: `executeBurn` / `executeLiquidity` take a slippage floor + deadline and are operator-gated for 1h after the interval, then permissionless. A "Trigger now" button MUST quote the swap first — a zero floor reverts. Consider keeping these in an operator console instead (see `FRONTEND_MIGRATION_V2.md` §6).
+- **Reward distribution triggers**: `RewardModule.processRewards()` — permissionless, no params, useful when a holder wants to crystallize before claiming (BNB mode). Token mode uses the operator-gated `convertAndDistribute(minRewardOut, deadline)`.
 - Consider: run a keeper bot in parallel for any tokens that accumulate above a threshold, so UIs don't have to expose this to unsophisticated users.
 
 ### 3.6 Admin / platform owner dashboard

@@ -16,7 +16,13 @@ This folder contains everything needed to understand and continue building the L
 
 6. **[FRONTEND_HANDOFF.md](./FRONTEND_HANDOFF.md)** — **self-contained** single-file brief for the frontend agent (which lives in a separate repo): the full available-data inventory + the complete subgraph schema + event list inlined, plus a mock-data → real-data **drift-audit** mandate and report format. **Hand this one file — and nothing else — to the frontend team.**
 
-7. **[CONTRACTS_DRIFT_RESOLUTION.md](./CONTRACTS_DRIFT_RESOLUTION.md)** — the authoritative **answer-back** to the frontend team's drift audit ([`CONTRACTS_SUBGRAPH_DRIFT_REPORT.md`](./CONTRACTS_SUBGRAPH_DRIFT_REPORT.md)): what was **built** (vesting / allocations / renounce), what **already existed but was mis-documented** (multi-recipient fees, the timelock, the real reward flow, …), what's **cut**, and what's **off-chain**. **Self-contained — hand this back to the frontend team.**
+7. **[TOKENOMICS_V2.md](./TOKENOMICS_V2.md)** — the next generation of tokenomics. **Phase A is built and green** (two trade-bricking defects in frozen-at-launch code fixed, share-exclusion set, slippage floors, the platform operator registry, `Database.randomnessProvider`). Still **SPEC**: the **PrizePool** (type 4 — epoch buyer rewards via off-chain ticketing + merkle settlement), the **MilestoneRewardModule** (type 5 — accrue, and the creator releases to all holders at their discretion; safety is the destination lock, not a metric gate), and the swappable randomness provider. **Source of truth for what we're building next.**
+
+8. **[MODULE_BUILD_HANDOFF.md](./MODULE_BUILD_HANDOFF.md)** — **self-contained brief for the team building the new modules** (`MilestoneRewardModule` type 5, `PrizePool` type 4, the randomness provider). Build order, the frozen-layer rule, the seven invariants they must not break, test requirements, open decisions, and the system-wide remaining-work / uncertainty list. **Hand this one file.**
+
+9. **[FRONTEND_MIGRATION_V2.md](./FRONTEND_MIGRATION_V2.md)** — **work order, not yet applied.** Every frontend-visible change from Tokenomics V2 Phase A: the breaking `CreatorFeeModule` accrue-and-pull ABI (a **Claim button must be built** — creator fees no longer arrive on their own), the new `minOut`/`deadline`/`operator` signatures on module keeper calls, and the changed launch-wizard init payloads. Includes a file-by-file map of `control-project-x-v0`. **Hand this to whoever picks up the frontend.**
+
+10. **[CONTRACTS_DRIFT_RESOLUTION.md](./CONTRACTS_DRIFT_RESOLUTION.md)** — the authoritative **answer-back** to the frontend team's drift audit ([`CONTRACTS_SUBGRAPH_DRIFT_REPORT.md`](./CONTRACTS_SUBGRAPH_DRIFT_REPORT.md)): what was **built** (vesting / allocations / renounce), what **already existed but was mis-documented** (multi-recipient fees, the timelock, the real reward flow, …), what's **cut**, and what's **off-chain**. **Self-contained — hand this back to the frontend team.**
 
 See also **[`../LAUNCH.md`](../LAUNCH.md)** at the repo root — the pre-mainnet launch checklist / working todo list.
 
@@ -42,6 +48,9 @@ lumoria-contracts/
 │   ├── FRONTEND.md          ← UI + subgraph integration notes
 │   ├── TESTING.md           ← Hardhat setup + coverage + Blocked list
 │   ├── SUBGRAPH.md          ← contract/event/entity spec for the subgraph
+│   ├── TOKENOMICS_V2.md     ← SPEC: PrizePool (4) + MilestoneReward (5) + reward-by-default
+│   ├── MODULE_BUILD_HANDOFF.md  ← brief for the team building modules 4 + 5
+│   ├── FRONTEND_MIGRATION_V2.md ← work order for the UI repo (not yet applied)
 │   └── FRONTEND_HANDOFF.md  ← frontend-agent brief: data inventory + drift audit
 ├── contracts/
 │   ├── Database.sol         ← central registry (Phase 1 ✅, V4 refs in Phase 5)
