@@ -1,8 +1,9 @@
 # Lumoria Tokenomics V2 — PrizePool, Milestones, Reward-by-Default
 
 **Status:** Phase A (§7, §4.1, §4.2, §6.2, §6.3) is **implemented and green**.
-The **PrizePool** (§2), the **MilestoneRewardModule** (§2B) and the randomness provider
-(§3) remain **SPEC** — review before building.
+The **MilestoneRewardModule** (§2B) is **implemented and green** (with one addition
+to the original spec: the 18-month public-release valve, §2B.2b). The **PrizePool**
+(§2) and the randomness provider (§3) remain **SPEC** — review before building.
 
 > Building these? Start with **[`MODULE_BUILD_HANDOFF.md`](./MODULE_BUILD_HANDOFF.md)**,
 > which is the work order, the invariants you must not break, and the open
@@ -37,7 +38,9 @@ they live in code that is frozen per-token at launch.
   milestone they are claiming recorded as free text on-chain. Its safety comes not
   from gating the button but from the fact that **the only value-moving call in the
   contract targets the RewardModule** — no withdraw, no recipient, no escape hatch.
-  Discretion over timing and amount; never over destination (§2B.2).
+  Discretion over timing and amount; never over destination (§2B.2). After 18 months
+  with no release, anyone may trigger a full-balance release — still only into the
+  RewardModule (§2B.2b).
 - Because nothing frozen changes, **tokens that have already launched can adopt
   both new modules** via the existing `TaxHandler.proposeModuleAdd`. This is the
   single most important property of the design.
@@ -357,7 +360,10 @@ event DonatedToRewards(uint256 indexed epochId, address rewardModule, uint256 am
 
 ## 2B. MILESTONE REWARD MODULE (Type 5)
 
-**Status:** SPEC. Not built. The simplest module in the system — build it first.
+**Status:** ✅ Implemented (`contracts/modules/MilestoneRewardModule.sol`), tested
+(`test/modules/MilestoneRewardModule.test.js`), subgraph template shipped. The
+18-month public-release valve (§2B.2b) was added to the original spec during the
+build, per the module work order.
 
 ### 2B.1 Concept
 
@@ -380,13 +386,41 @@ Not from gating the button. From the destination:
 > *destination*.
 
 A creator who decides they want this BNB cannot have it. The worst they can do is
-never press the button, in which case the funds sit visibly on-chain forever,
-provably unreachable by anyone including themselves.
+never press the button — and even that is now bounded by the 18-month valve
+(§2B.2b): the funds sit visibly on-chain, unreachable by anyone *as personal
+funds*, and eventually releasable to holders by anyone at all.
 
 That is a stronger guarantee than an on-chain milestone gate would have delivered,
 and it is trivially auditable: **verify that the contract contains exactly one
 value-moving call, and that its target is the RewardModule.** Everything else is
-bookkeeping.
+bookkeeping. (The test suite pins this as an ABI allowlist — any new external
+function fails the "destination lock" test until reviewed against this section.)
+
+### 2B.2b The 18-month public-release valve
+
+The original spec accepted stranding: a creator who never presses the button
+leaves the BNB idle forever. That posture is now bounded:
+
+> **If no release has happened for 18 months (540 days), `publicRelease()` opens
+> to anyone.** It releases the ENTIRE balance — full, not partial — still only
+> into the RewardModule. Any release, creator or public, restarts the clock.
+
+Design notes, in case they come up in review:
+
+- The clock starts at `__init__` and is reset by **every** release. A creator who
+  releases even occasionally keeps the button theirs indefinitely — the valve only
+  opens on genuine abandonment.
+- The public path releases the **full balance** deliberately. If it accepted an
+  amount, a hostile caller could release 1 wei, reset the clock, and keep the
+  remainder locked for another 18 months. All-or-nothing removes the grief.
+- The public caller gains nothing: destination is still not a parameter, and the
+  release event records `by`, so the subgraph can distinguish a creator release
+  from a valve release. The valve's fixed on-chain `reason` is
+  `"18-month public release"`.
+- `publicRelease` on an empty module reverts (`Bad amount`) rather than resetting
+  the clock — an empty release must not push the next real one out 18 months.
+- The valve turns "idle capital, forever" into "holders eventually get paid".
+  The UI should surface `publicReleaseAt()` next to the accrued balance.
 
 > Worth knowing why we did *not* gate on metrics, in case it comes up in the audit:
 > the two milestones people actually care about cannot be enforced. Holder count is
@@ -408,9 +442,14 @@ function receiveTax() external payable;
 /// This is the ONLY function in the contract that moves value, and its
 /// destination is not a parameter.
 function releaseRewards(uint256 amount, string calldata reason) external;
+
+/// ANYONE, but only after 18 months with no release (§2B.2b). Releases the
+/// ENTIRE balance into the RewardModule and restarts the clock.
+function publicRelease() external;
 ```
 
-That is the entire external surface, plus `getModuleType()` / `getStats()`.
+That is the entire external surface, plus `getModuleType()` / `getStats()` and the
+views (`totalAccrued`, `totalReleased`, `lastReleaseTime`, `publicReleaseAt`).
 
 Checks in `releaseRewards`:
 
@@ -482,18 +521,20 @@ amount — it is the accountability record.
 - **No swap anywhere**, therefore no operator gate and no slippage floor (§6.3).
 - **No withdrawal path of any kind.** This is the load-bearing property. Any future
   change that adds one destroys the module's entire guarantee.
-- `nonReentrant` on `releaseRewards` (it makes an external call to `donate`).
+- `nonReentrant` on `releaseRewards` and `publicRelease` (they make an external
+  call to `donate`).
 - `TaxHandler.renounceManagement()` does not disable releases — `creator` is
   immutable. A renounced token with this module is *more* trustworthy: tokenomics
   frozen, funds still only reachable by holders.
-- **Stranding is accepted, by design.** A creator who never presses the button
-  leaves the BNB idle forever. Mitigate in the UI, not in code: show
-  accrued-but-unreleased BNB prominently on the token page.
+- **Stranding is bounded, not accepted.** A creator who never presses the button
+  leaves the BNB idle for at most 18 months, after which anyone can push it to
+  holders (§2B.2b). Still mitigate in the UI: show accrued-but-unreleased BNB and
+  `publicReleaseAt()` prominently on the token page.
 
 ### 2B.8 `getStats()`
 
 ```solidity
-abi.encode(totalAccrued, totalReleased, address(this).balance)
+abi.encode(totalAccrued, totalReleased, address(this).balance, lastReleaseTime)
 ```
 
 ---
@@ -1138,10 +1179,11 @@ Still outstanding before mainnet, from `LAUNCH.md`: the BSC-fork rehearsal
 
 **Phase B — any time, including after mainnet.**
 
-- **B1 · MilestoneRewardModule (type 5)** — ~2 days. No randomness, no swap, no
-  merkle, no configuration. Accrue, and one creator-gated call that donates to the
-  RewardModule. The easiest module in the system and the right first task to
-  calibrate a new team on the invariants.
+- ✅ **B1 · MilestoneRewardModule (type 5)** — shipped, with the 18-month public
+  valve (§2B.2b) and a subgraph template. No randomness, no swap, no merkle, no
+  configuration. Accrue, and one creator-gated call that donates to the
+  RewardModule (plus the valve, which is the same call opened to anyone after
+  540 days of inactivity).
 - **B2 · PrizePool (type 4)** — ~2 weeks. Epoch bucketing, merkle settlement,
   three payout modes, pull claims, rollover.
 - **B3 · Randomness** — `IRandomnessProvider` + `TrustedOperatorRandomness`
@@ -1177,7 +1219,7 @@ bonded challenge game on `postRoot` · multisig on `Database.owner()`.
 | 8b | **Store an on-chain price observation in the hook so buybacks become trustlessly permissionless?** | **No. Recommended against.** See §13.2. Only covers our own pool — `RewardModule.convertAndDistribute` swaps on an external router the hook never sees, so the operator can never be fully removed. Recurring gas on every trade to protect an occasional keeper action. And a lagged-tick floor on a memecoin either allows sandwiches (wide band) or bricks legitimate burns during normal volatility (tight band). The operator registry is reversible; the hook is not. |
 | 9 | **MilestoneReward: gate the button on an on-chain metric?** | **No — settled.** Holder count is not on-chain and market cap is flash-loan manipulable, so a gate on the metrics anyone cares about would be theatre. Safety comes from the destination lock instead (§2B.2). The claimed milestone is recorded as free text in `RewardsReleased.reason`. |
 | 10 | **MilestoneReward: can anyone but the creator release?** | **No.** Token creator only, read live from the immutable `ITaxHandler.creator()`. Not the platform operator, not a keeper. Discretion belongs to the team that launched the token. |
-| 11 | **MilestoneReward: stranded funds if the creator never presses?** | Accepted, by design. Mitigate in UI, not code: show accrued-but-unreleased BNB prominently on the token page. The funds are provably unreachable by anyone, including the creator, so this is idle capital rather than counterparty risk. |
+| 11 | **MilestoneReward: stranded funds if the creator never presses?** | **Bounded by the 18-month valve (§2B.2b).** After 540 days with no release, anyone can release the full balance — still only into the RewardModule. Idle capital for at most 18 months, never counterparty risk. UI still shows accrued BNB + `publicReleaseAt()`. |
 | 12 | **MilestoneReward on a token with no RewardModule?** | `releaseRewards` reverts with `No reward module`. The launch wizard MUST pair them. This is the concrete argument for reward-by-default (§4). |
 
 ---

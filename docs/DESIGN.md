@@ -93,6 +93,8 @@ Lumoria is a **curated token launchpad** with **modular tokenomics**, whose liqu
 | `BurnModule.sol` | Buys back tokens with collected BNB and burns them, on a configurable interval | **DONE** |
 | `LiquidityModule.sol` | Auto-liquidity: sells half of tokens, pairs with received BNB, adds to LP | **DONE** |
 | `CreatorFeeModule.sol` | Sends collected BNB directly to the token creator | **DONE** |
+| `MilestoneRewardModule.sol` | Accrues tax; creator releases any amount to ALL holders via the RewardModule, milestone recorded as free text. 18-month public-release valve. (TOKENOMICS_V2 §2B) | **DONE** |
+| `PrizePool.sol` | Buyers earn tickets per epoch; merkle-settled pro-rata / lottery / all-holders payouts (TOKENOMICS_V2 §2) | **SPEC** |
 | `RebateContract.sol` | Holds token supply funded by creator, credits rebates to buyers on DEX purchases | **DONE** |
 
 ### Launch Modes
@@ -711,6 +713,34 @@ Events:
 
 **Multiple instances per token (arbitrary fee-recipient wallets).** TaxHandler does not enforce uniqueness on `moduleType`, so a creator can stack N CreatorFeeModule instances in the initial `modules[]` array (subject to MAX_MODULES=10), each with its own recipient and allocation. This is the canonical way to support "team wallet + marketing wallet + treasury + …" splits without writing a new module type. Recipients may be contracts; since payouts are pulled, a contract recipient can no longer endanger trading. Names for recipients are not stored on-chain (waste of gas); the frontend keeps a `(token, moduleIndex) → label` mapping off-chain.
 
+### 6.5 MilestoneRewardModule (Type 5)
+**Purpose**: Accrues tax BNB; the creator releases any amount of it to **all holders** at any time, with the claimed milestone recorded as free on-chain text. Full spec + rationale: [`TOKENOMICS_V2.md`](./TOKENOMICS_V2.md) §2B.
+
+```
+Storage:
+- taxHandler: inferred from msg.sender at __init__
+- token: from init payload abi.encode(address)
+- totalAccrued / totalReleased: analytics
+- lastReleaseTime: the 18-month public valve measures from here
+
+Flow:
+1. receiveTax() accrues + emits. Nothing else (swap-path invariant, V2 §6.1).
+2. releaseRewards(amount, reason) — CREATOR ONLY, any amount, any time. Resolves
+   the token's RewardModule from the TaxHandler module list at release time and
+   calls donate{value: amount}(). The ONLY value-moving call in the contract;
+   destination is never a parameter. Reverts "No reward module" if the token has
+   none — the launch wizard must pair the two module types.
+3. publicRelease() — ANYONE, but only after 18 months (540 days) with no release.
+   Releases the FULL balance (all-or-nothing, so a dust release can't be used to
+   grief the clock). Any release resets the clock.
+
+Events:
+- TaxReceived(amount, totalAccrued)
+- RewardsReleased(by, rewardModule, amount, remaining, reason)
+```
+
+**No withdrawal path of any kind** — no withdraw, no recipient, no sweep, no owner. The creator's discretion is over timing and amount, never destination. The test suite pins the external surface as an allowlist so any added function fails review loudly. `renounceManagement()` does not disable releases (`creator()` is fixed at launch).
+
 ### Module Interface
 ```solidity
 interface IModule {
@@ -724,6 +754,8 @@ interface IRewardModule is IModule {
     function setShare(address holder, uint256 amount) external;
     function claimReward() external;
     function getUnpaidRewards(address holder) external view returns (uint256);
+    function donate() external payable;                    // permissionless top-up (V2 §4.1)
+    function sync(address[] calldata holders) external;    // post-launch backfill (V2 §4.2)
 }
 ```
 

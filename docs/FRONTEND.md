@@ -328,6 +328,31 @@ Auto-liquidity. Swaps half BNB for tokens, pairs with the other half, and locks 
 
 ---
 
+### 2.8b MilestoneRewardModule 🟢
+
+Accrues tax BNB; the creator releases any amount to **all holders** (via the token's RewardModule) whenever they choose, with the claimed milestone recorded on-chain as free text. No withdraw, no recipient, no sweep — the only value-moving call targets the RewardModule. Spec: `TOKENOMICS_V2.md` §2B.
+
+**Reads:** `taxHandler`, `token`, `totalAccrued` (lifetime tax in), `totalReleased` (lifetime released), `lastReleaseTime`, `publicReleaseAt()` (when the 18-month valve opens), `getModuleType()` (returns 5), `getStats()` → `(totalAccrued, totalReleased, balance, lastReleaseTime)`.
+
+**Writes:**
+- `receiveTax()` payable — TaxHandler only.
+- `releaseRewards(amount, reason)` — **token creator only**, any amount ≤ balance, any time. `reason` is the milestone claim, recorded verbatim in the event.
+- `publicRelease()` — **anyone, but only after 18 months (540 days) with no release.** Releases the ENTIRE balance to holders. Any release resets the clock.
+
+**Events:**
+| Event | Fires when | Subgraph use |
+|---|---|---|
+| `TaxReceived(amount, totalAccrued)` | Every tax receipt > 0 | Accrual chart; `Module.totalReceivedBnb` |
+| `RewardsReleased(by, rewardModule, amount, remaining, reason)` | Creator release or public valve | `MilestoneRelease` entity — show `reason` verbatim on the token page; `by != creator` means the valve fired |
+
+**UI surfaces:**
+- **Token page**: "Milestone vault" card — accrued-but-unreleased BNB (live `address(module).balance`), release history with the `reason` strings (the team's public accountability record), and a countdown to `publicReleaseAt()`.
+- **Creator dashboard**: release form (amount + reason). Warn that the reason is permanent and public.
+- **After the valve opens**: show a "Release to holders" button to *everyone* wired to `publicRelease()`.
+- ⚠️ **Launch wizard MUST pair this module with a RewardModule** — `releaseRewards` reverts `"No reward module"` otherwise. A 0-bps RewardModule is legal and sufficient.
+
+---
+
 ### 2.9 LumoriaHook + Uniswap V4 PoolManager 🟢
 
 Trading lives in the canonical Uniswap V4 PoolManager (BSC: `0x28e2ea090877bf75740558f6bfb36a5ffee9e9df`). The **LumoriaHook** runs on every swap — any router — and is the source of truth for trades, fees, rebates, and volume.
@@ -678,7 +703,7 @@ type Trade @entity(immutable: true) {
 type Module @entity {
     id: ID!                    # module address
     token: Token!
-    moduleType: Int!           # 0=REWARD, 1=BURN, 2=LIQUIDITY, 3=CREATOR
+    moduleType: Int!           # 0=REWARD, 1=BURN, 2=LIQUIDITY, 3=CREATOR, 4=PRIZE (spec), 5=MILESTONE
     buyAllocation: BigInt!
     sellAllocation: BigInt!
     active: Boolean!

@@ -42,6 +42,8 @@ Lumoria is a **factory system**: a handful of singletons, plus per-launch contra
 1 = BURN       (BurnModule)
 2 = LIQUIDITY  (LiquidityModule)
 3 = CREATOR    (CreatorFeeModule)
+4 = PRIZE      (PrizePool — spec'd, template pending)
+5 = MILESTONE  (MilestoneRewardModule)
 ```
 `ModuleAdded.moduleType` selects which template to spawn. Launch mode enum: `0 = BYOL`, `1 = FLAT_CURVE`. Module change type: `0 = ADD`, `1 = REMOVE`, `2 = UPDATE`.
 
@@ -247,6 +249,17 @@ Spawn the matching template in the `ModuleAdded` handler (and via call-hydration
 | `LiquidityAdded` | `(uint256 bnbAmount, uint256 tokenAmount, uint256 lpTokens, uint256 timestamp)` | auto-LP history (`lpTokens` = V4 liquidity units locked in the vault) |
 | `IntervalUpdated` | `(uint256 oldInterval, uint256 newInterval)` | cadence audit |
 
+**MilestoneRewardModule (type 5):**
+| Event | Signature | Use |
+|---|---|---|
+| `TaxReceived` | `(uint256 amount, uint256 totalAccrued)` | inflow; `Module.totalReceivedBnb` |
+| `RewardsReleased` | `(address indexed by, address indexed rewardModule, uint256 amount, uint256 remaining, string reason)` | `MilestoneRelease` entity; `Module.totalReleased`, `Module.lastReleaseTime`. `reason` is the team's public, immutable accountability record — surface verbatim on the token page. `by != creator` means the 18-month public valve fired. |
+
+Milestone hydration note: `Module.lastReleaseTime` needs no contract call — the module's
+`__init__` runs in the same tx as `ModuleAdded` / `TokenRegistered`, so the 18-month clock
+starts at that block's timestamp. The frontend derives "public release opens at" as
+`lastReleaseTime + 540 days` (or reads `publicReleaseAt()` live).
+
 ### 5.10 FlatCurve (template, one per raise)
 
 | Event | Signature | Fires when | Handler |
@@ -390,7 +403,7 @@ type Module @entity {
     id: ID!                       # module address
     token: Token!
     taxHandler: Bytes!
-    moduleType: Int!              # 0..3
+    moduleType: Int!              # 0..5
     buyAllocation: BigInt!
     sellAllocation: BigInt!
     active: Boolean!
@@ -407,7 +420,23 @@ type Module @entity {
     minDistribution: BigInt       # Reward (call-hydrated, §3)
     interval: BigInt              # Burn/Liquidity (call-hydrated; then IntervalUpdated)
     lastExecuted: BigInt          # Burn/Liquidity (BurnExecuted/LiquidityAdded timestamp; for countdowns)
+    totalReleased: BigInt         # Milestone (sum RewardsReleased.amount)
+    lastReleaseTime: BigInt       # Milestone — 18-month public valve measures from here
     forwards: [CreatorFeeForward!]! @derivedFrom(field: "module")  # Creator: per-recipient history
+    releases: [MilestoneRelease!]! @derivedFrom(field: "module")   # Milestone: release history
+}
+
+# Milestone releases. `reason` is the team's public, timestamped, immutable
+# accountability record; `by != token.creator` means the 18-month valve fired.
+type MilestoneRelease @entity(immutable: true) {
+    id: ID!                       # tx-hash:log-index
+    module: Module!
+    by: Bytes!
+    rewardModule: Bytes!
+    amount: BigInt!
+    remaining: BigInt!
+    reason: String!
+    timestamp: BigInt!
 }
 
 type PendingChange @entity {
@@ -615,6 +644,7 @@ templates:
   - RewardModule        # TaxReceived, DividendsDistributed, RewardClaimed, ShareUpdated
   - BurnModule          # TaxReceived, BurnExecuted, IntervalUpdated
   - LiquidityModule     # TaxReceived, LiquidityAdded, IntervalUpdated
+  - MilestoneRewardModule  # TaxReceived, RewardsReleased
   - FlatCurve           # contribute/refund/launch/claim lifecycle
 ```
 

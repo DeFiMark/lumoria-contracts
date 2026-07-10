@@ -41,7 +41,8 @@ lumoria-contracts/
 │       ├── CreatorFeeModule.test.js
 │       ├── RewardModule.test.js   ← BNB and token modes (uses Lumoria router as external)
 │       ├── BurnModule.test.js     ← config/guards + end-to-end executeBurn (real V4 swap)
-│       └── LiquidityModule.test.js← config/guards + end-to-end executeLiquidity (vault lock)
+│       ├── LiquidityModule.test.js← config/guards + end-to-end executeLiquidity (vault lock)
+│       └── MilestoneRewardModule.test.js ← destination lock, 18-month valve, real-swap invariant
 └── contracts/
     └── test-mocks/
         ├── MockWBNB.sol           ← minimal WETH9 stand-in (legacy path marker only)
@@ -146,6 +147,7 @@ Operators are **platform-wide**, not part of any init payload: `database.setOper
 | `RewardModule.sol` | ✅ | ✅ | BNB mode + token mode (external router = LumoriaSwapRouter over V4), **`donate()` (V2 §4.1)**, **`sync()` backfill (V2 §4.2)**, **regression: token-mode `receiveTax` never calls the external router (V2 §7.1)** |
 | `BurnModule.sol` | ✅ | ✅ | config + guards + end-to-end `executeBurn` via a real V4 swap, **slippage floor + deadline + operator window & liveness fallback (V2 §6.2)**, **buyback tax re-enters `receiveTax` and terminates** |
 | `LiquidityModule.sol` | ✅ | ✅ | config + guards + end-to-end `executeLiquidity` (vault-locked liquidity), **slippage floors + deadline (V2 §6.2)** |
+| `MilestoneRewardModule.sol` | ✅ | ✅ | init guards, taxHandler-only accrual, creator-only release + `No reward module` + renounce-immunity, **destination lock pinned as an ABI allowlist**, full-supply-holder claim + system-contract exclusion, **18-month public valve (open/reset/full-balance/empty-revert)**, real V4 buy+sell drives `receiveTax` (swap-path invariant) |
 | `v4/LumoriaHook.sol` | ✅ | ✅ | **post-swap `sqrtPriceX96`/`tick` on both trade events, with the exact `2^192/sqrt^2` price formula pinned numerically**, buy/sell fee math to the wei, 98% + 0% taxes, multi-pool isolation, exactOut rejection, **bypass-proofing via raw PoolManager swaps**, pool-creation/liquidity/donate gates, rebate + volume attribution |
 | `v4/LumoriaLiquidityVault.sol` | ✅ | ✅ | router-only entry, lazy pool init at implied price, locked-liquidity growth, dust refunds (implicit in module flows) |
 | `v4/LumoriaSwapRouter.sol` | ✅ | ✅ | buy/sell exactIn, amountOutMin + deadline guards, addLiquidityETH delegation, non-Lumoria rejection |
@@ -162,7 +164,7 @@ Operators are **platform-wide**, not part of any init payload: `database.setOper
 
 ### Blocked — add tests once unblocked
 
-None currently. All Phase 1-5 contracts — plus the Phase-6 vesting/allocations/renounce work (incl. the rebate renounce-freeze) and the Tokenomics-V2 Phase-A substrate changes — are under test (**217 tests green**).
+None currently. All Phase 1-5 contracts — plus the Phase-6 vesting/allocations/renounce work (incl. the rebate renounce-freeze), the Tokenomics-V2 Phase-A substrate changes, and the Phase-B MilestoneRewardModule — are under test (**241 tests green**).
 
 ---
 

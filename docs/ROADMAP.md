@@ -24,6 +24,7 @@ Phase 3: DEX Refactor             ✅ DONE   (superseded by Phase 5)
 Phase 4: Launch System            ✅ DONE
 Phase 5: Uniswap V4 Migration     ✅ DONE
 Phase 6: Pre-Beta Frontend Align  ✅ DONE
+Phase 7: Tokenomics V2 modules    🟡 IN PROGRESS (Phase A ✅; B1 Milestone ✅; B2/B3/B4 in flight)
 ```
 
 **All six phases complete.** Phase 5 replaced the custom V2-style DEX (Factory/Pair/Router) with Uniswap V4 pools + a LumoriaHook that enforces the entire fee stack at the pool level. Phase 6 closed the frontend drift audit (`docs/CONTRACTS_SUBGRAPH_DRIFT_REPORT.md`) by building the three genuinely-missing capabilities — token **vesting** + custom **allocations** + management **renounce** — and documenting the many capabilities that already existed but were mis-described to the frontend (see `docs/CONTRACTS_DRIFT_RESOLUTION.md`). **175 tests green; deploy + smoke validated locally.** Remaining pre-mainnet work: a real **security audit** (the hook handles up to 98% of swap flow — see DESIGN.md §14, now also covering `VestingVault`), the **subgraph** (hook/vault/vesting events — see FRONTEND.md / SUBGRAPH.md), and final frontend integration (V4Quoter quoting, Universal Router support). Deployment scripts live in `scripts/` (see [TESTING.md § Deployment](./TESTING.md#deployment-scripts)).
@@ -158,6 +159,36 @@ Closed the frontend drift audit (`docs/CONTRACTS_SUBGRAPH_DRIFT_REPORT.md`). Bui
 **Documented-only (already shipped, was mis-described to the frontend):** multi-recipient fees via N CreatorFeeModules (B3), the 24h fee/module **timelock** (R1), the real `getUnpaidRewards` reward-claim flow (R2), module stats/burn countdowns (R3), the **continuous** reward model (B4), `minDistribution` semantics (B5), rebates vs referrals, per-user volume attribution, `predictTokenAddress`, V4Quoter/StateView quoting. **Cut:** loyalty tiers (B7), referrals (B8), PXX (B9). **Off-chain:** token metadata (B10). All resolved in `CONTRACTS_DRIFT_RESOLUTION.md`.
 
 **Verification:** 175 tests green (+28: VestingVault 11, allocations 7, renounce 6, rebate renounce-freeze 4). Deploy dry-run wires the vesting vault end-to-end.
+
+---
+
+## Phase 7 — Tokenomics V2 Modules ([`TOKENOMICS_V2.md`](./TOKENOMICS_V2.md))
+
+**Phase A (pre-mainnet substrate) ✅ COMPLETE** — hot-path swap removed from
+RewardModule (§7.1), CreatorFeeModule accrue-and-pull (§7.2), share-exclusion set
+(§7.3), `Database.randomnessProvider` (§7.4), dust-sweep fix (§7.5), fee
+pending-disarm + per-change increase cap (§7.6/§7.7), `donate()`/`sync()`,
+slippage floors + platform operator registry (§6.2/§6.3). 217 tests green at
+Phase-A close.
+
+**Phase B (module drops — nothing frozen changes, ships any time):**
+
+- ✅ **B1 · MilestoneRewardModule (type 5)** — `contracts/modules/MilestoneRewardModule.sol`.
+  Accrues tax; creator releases any amount to all holders via the RewardModule's
+  `donate()` with the milestone recorded as free text on-chain. Exactly one
+  value-moving call; destination never a parameter. Includes the **18-month
+  public-release valve** (§2B.2b): after 540 days with no release, anyone can
+  push the full balance to holders; any release resets the clock. 24 tests
+  (`test/modules/MilestoneRewardModule.test.js`) + subgraph template.
+- ⬜ **B2 · Randomness** — `IRandomnessProvider` + `TrustedOperatorRandomness`
+  (commit–reveal + blockhash mixing) + `MockRandomness`. Registered at
+  `Database.randomnessProvider`. Blocks only the PrizePool's LOTTERY mode.
+- ⬜ **B3 · PrizePool (type 4)** — epoch bucketing, off-chain tickets from
+  `TokenPurchased`, merkle settlement (root **before** randomness), three payout
+  modes, pull claims, rollover. Spec: TOKENOMICS_V2 §2.
+- ⬜ **B4 · Subgraph + operator scripts** for both (milestone template shipped
+  with B1; PrizePool template + ticket derivation + settle/randomness scripts
+  land with B3).
 
 ---
 

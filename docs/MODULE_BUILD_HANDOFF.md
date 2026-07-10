@@ -18,7 +18,7 @@ has the repo discipline.
 
 | # | Deliverable | Type | Effort | Blocks |
 |---|---|---|---|---|
-| **B1** | `MilestoneRewardModule` | module 5 | ~2 days | nothing |
+| **B1** ✅ | `MilestoneRewardModule` | module 5 | shipped | nothing |
 | **B2** | `IRandomnessProvider` + `TrustedOperatorRandomness` + `MockRandomness` | infra | ~3 days | B3's lottery mode |
 | **B3** | `PrizePool` | module 4 | ~2 weeks | nothing |
 | **B4** | Subgraph templates + operator scripts for both | — | ~1 week | — |
@@ -27,7 +27,14 @@ has the repo discipline.
 the invariants before you touch merkle proofs and epoch math. Do not start B3
 until B1 is merged and green.
 
-### B1 — MilestoneRewardModule (spec: §2B)
+### B1 — MilestoneRewardModule (spec: §2B) ✅ SHIPPED
+
+`contracts/modules/MilestoneRewardModule.sol` + 24 tests + subgraph template.
+Shipped with one addition to the spec below: the **18-month public-release valve**
+(§2B.2b) — after 540 days with no release, anyone can push the FULL balance to
+holders (still only into the RewardModule); any release resets the clock.
+`ITaxHandler` gained the `getModule(uint256)` declaration (the getter always
+existed on the implementation — no deployed bytecode changed).
 
 Accrues tax BNB. The token creator presses a button to release any amount of it to
 **all holders**, whenever they like, with the milestone they are claiming recorded
