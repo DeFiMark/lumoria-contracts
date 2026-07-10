@@ -44,6 +44,7 @@ interface ITaxHandler {
     event ModuleRebalanceProposed(uint256[] indices, uint256[] buyAllocs, uint256[] sellAllocs);
     event ModuleChangeCancelled();
     event ManagementRenounced(address indexed token, uint256 timestamp);
+    event ExcludedFromShares(address indexed account);
 
     // ─── Initialization ─────────────────────────────────────────────
 
@@ -64,6 +65,20 @@ interface ITaxHandler {
     // ─── Share management (called by Token) ─────────────────────────
 
     function setShare(address holder, uint256 amount) external;
+
+    /// @notice True if `holder` is excluded from reward-share tracking.
+    ///         Excluded addresses are system contracts that custody tokens on
+    ///         someone else's behalf (VestingVault, RebateContract, FlatCurve,
+    ///         LiquidityVault, module clones) plus the pool itself. Letting them
+    ///         accrue reflections would strand BNB with no claim path.
+    function isExcludedFromShares(address holder) external view returns (bool);
+
+    /// @notice Exclude an address from share tracking. Callable only by the
+    ///         Generator, which uses it to exclude a token's FlatCurve — the one
+    ///         excluded address that does not exist yet at TaxHandler init time.
+    ///         Deliberately NOT owner-callable: an owner able to exclude arbitrary
+    ///         holders could zero any holder's rewards.
+    function excludeFromShares(address account) external;
 
     // ─── Fee queries ────────────────────────────────────────────────
 

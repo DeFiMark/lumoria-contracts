@@ -113,7 +113,7 @@ contract Generator is IGenerator, ReentrancyGuard {
         if (launchMode == LaunchMode.BYOL) {
             _launchBYOL(token, launchPayload, allocations);
         } else {
-            _launchFlatCurve(token, launchPayload, allocations);
+            _launchFlatCurve(token, taxHandler, launchPayload, allocations);
         }
 
         emit ProjectGenerated(
@@ -175,7 +175,12 @@ contract Generator is IGenerator, ReentrancyGuard {
     ///        uint256 startTime,
     ///        uint256 endTime
     ///      )
-    function _launchFlatCurve(address token, bytes calldata payload, AllocationData[] calldata allocations) internal {
+    function _launchFlatCurve(
+        address token,
+        address taxHandler,
+        bytes calldata payload,
+        AllocationData[] calldata allocations
+    ) internal {
         require(msg.value == 0, "Gen: no BNB on FLAT_CURVE");
 
         (
@@ -197,6 +202,13 @@ contract Generator is IGenerator, ReentrancyGuard {
 
         // Clone FlatCurve
         address flatCurve = _clone(database.flatCurveMasterCopy());
+
+        // Exclude it from reward-share tracking BEFORE it receives any tokens.
+        // The FlatCurve custodies presale tokens for contributors who haven't
+        // claimed yet; reflections accrued against that balance could never be
+        // claimed by anyone. This is the one excluded address that does not
+        // exist when the TaxHandler initializes, so the Generator registers it.
+        ITaxHandler(taxHandler).excludeFromShares(flatCurve);
 
         // Move the presale+LP allocation into the FlatCurve
         TransferHelper.safeTransfer(token, flatCurve, totalForCurve);

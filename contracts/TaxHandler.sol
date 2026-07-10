@@ -30,6 +30,7 @@ pragma solidity 0.8.28;
 import "./interfaces/ITaxHandler.sol";
 import "./interfaces/IModule.sol";
 import "./interfaces/IDatabase.sol";
+import "./interfaces/ILumoriaToken.sol";
 import "./lib/ReentrancyGuard.sol";
 
 contract TaxHandler is ITaxHandler, ReentrancyGuard {
@@ -63,10 +64,20 @@ contract TaxHandler is ITaxHandler, ReentrancyGuard {
     ///      no fee or module change can be proposed or executed. One-way.
     bool public override managementRenounced;
 
-    /// @dev Cached `Database.vestingVault()` at init. Excluded from reward-share
-    ///      tracking so vested-but-unclaimed tokens don't accrue stranded
-    ///      reflections (same rationale the token uses to exclude the pool).
-    address internal _vestingVault;
+    /// @dev Addresses excluded from reward-share tracking. These are system
+    ///      contracts that custody tokens on someone else's behalf; if they
+    ///      accrued reflections, that BNB would be stranded with no claim path.
+    ///
+    ///      Populated at init with the VestingVault, RebateContract, and
+    ///      LiquidityVault; extended with every module clone as it is created;
+    ///      and extended once more by the Generator with the token's FlatCurve
+    ///      (which does not exist yet when this contract is initialized).
+    ///
+    ///      The pool itself is excluded on the token side — LumoriaToken never
+    ///      calls setShare for `pair` — so it does not need an entry here, but
+    ///      `isExcludedFromShares` reports it for the benefit of off-chain
+    ///      consumers and RewardModule.sync().
+    mapping(address => bool) internal _excludedFromShares;
 
     uint256 internal _buyFee;
     uint256 internal _sellFee;
@@ -144,9 +155,15 @@ contract TaxHandler is ITaxHandler, ReentrancyGuard {
         token = token_;
         database = database_;
         creator = creator_;
-        _vestingVault = IDatabase(database_).vestingVault();
         _buyFee = buyFee_;
         _sellFee = sellFee_;
+
+        // System contracts that custody tokens for someone else. Reflections
+        // accrued here could never be claimed by anyone. The token's FlatCurve
+        // is added later by the Generator (it does not exist yet).
+        _exclude(IDatabase(database_).vestingVault());
+        _exclude(IDatabase(database_).rebateContract());
+        _exclude(IDatabase(database_).liquidityVault());
 
         uint256 buySum;
         uint256 sellSum;
@@ -157,6 +174,7 @@ contract TaxHandler is ITaxHandler, ReentrancyGuard {
 
             address cloneAddr = _clone(impl);
             IModule(cloneAddr).__init__(m.initPayload);
+            _exclude(cloneAddr);
 
             modules.push(ModuleConfig({
                 moduleAddress: cloneAddr,
@@ -221,10 +239,10 @@ contract TaxHandler is ITaxHandler, ReentrancyGuard {
     function setShare(address holder, uint256 amount) external override {
         require(msg.sender == token, "Only token");
 
-        // The VestingVault is excluded from reward-share tracking: tokens it
-        // custodies are locked for a beneficiary who hasn't claimed yet, so
-        // letting the vault accrue reflections would strand them here.
-        if (_vestingVault != address(0) && holder == _vestingVault) return;
+        // System contracts that custody tokens on someone else's behalf are
+        // excluded: reflections accrued to them could never be claimed. See
+        // the `_excludedFromShares` declaration for the full list and rationale.
+        if (_excludedFromShares[holder]) return;
 
         uint256 old = _shares[holder];
         if (old == amount) return;
@@ -232,6 +250,49 @@ contract TaxHandler is ITaxHandler, ReentrancyGuard {
         _totalShares = _totalShares - old + amount;
         _shares[holder] = amount;
 
+        _propagateShare(holder, amount);
+
+        emit ShareUpdated(holder, old, amount);
+    }
+
+    // ─── Share Exclusions ───────────────────────────────────────────
+
+    /// @inheritdoc ITaxHandler
+    function isExcludedFromShares(address holder) public view override returns (bool) {
+        if (holder == address(0)) return true;
+        if (_excludedFromShares[holder]) return true;
+        // The pool is excluded on the token side (LumoriaToken never calls
+        // setShare for `pair`), so it has no mapping entry. Report it here for
+        // off-chain consumers and RewardModule.sync().
+        return holder == ILumoriaToken(token).pair();
+    }
+
+    /// @inheritdoc ITaxHandler
+    function excludeFromShares(address account) external override {
+        require(msg.sender == IDatabase(database).generator(), "Only generator");
+        require(account != address(0), "Zero account");
+        _exclude(account);
+    }
+
+    /// @dev Zeroes any share the account already accrued, so an address excluded
+    ///      after it has held tokens stops diluting everyone else immediately.
+    function _exclude(address account) internal {
+        if (account == address(0) || _excludedFromShares[account]) return;
+        _excludedFromShares[account] = true;
+
+        uint256 old = _shares[account];
+        if (old != 0) {
+            _totalShares -= old;
+            _shares[account] = 0;
+            _propagateShare(account, 0);
+            emit ShareUpdated(account, old, 0);
+        }
+
+        emit ExcludedFromShares(account);
+    }
+
+    /// @dev Pushes a share update to every reward module.
+    function _propagateShare(address holder, uint256 amount) internal {
         uint256 len = modules.length;
         for (uint256 i = 0; i < len; i++) {
             ModuleConfig storage m = modules[i];
@@ -239,8 +300,6 @@ contract TaxHandler is ITaxHandler, ReentrancyGuard {
                 IRewardModule(m.moduleAddress).setShare(holder, amount);
             }
         }
-
-        emit ShareUpdated(holder, old, amount);
     }
 
     // ─── Fee Change Timelock ────────────────────────────────────────
@@ -459,6 +518,7 @@ contract TaxHandler is ITaxHandler, ReentrancyGuard {
 
         address cloneAddr = _clone(impl);
         IModule(cloneAddr).__init__(p.initPayload);
+        _exclude(cloneAddr);
 
         modules.push(ModuleConfig({
             moduleAddress: cloneAddr,
