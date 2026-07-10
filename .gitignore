@@ -29,3 +29,6 @@ deployments/localhost.json
 
 # Claude Code session data + worktrees (local only — never commit)
 .claude/
+
+# Randomness operator seeds (commit-reveal preimages) - never commit
+.randomness-seeds/
