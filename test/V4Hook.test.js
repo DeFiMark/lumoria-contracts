@@ -48,6 +48,18 @@ async function deadline() {
     return (await ethers.provider.getBlock("latest")).timestamp + 3600;
 }
 
+/** The CreatorFeeModule accrues rather than pushing (docs/TOKENOMICS_V2.md §7.2),
+ *  so the tax leg is asserted as the module's `owed` balance rather than as a
+ *  wallet delta. Resolves the module through the Database so it works for tokens
+ *  launched by any helper. */
+async function taxOwed(base, tokenAddr, recipient) {
+    const taxHandlerAddr = await base.database.tokenTaxHandler(tokenAddr);
+    const taxHandler = await ethers.getContractAt("TaxHandler", taxHandlerAddr);
+    const cfg = await taxHandler.getModule(0);
+    const mod = await ethers.getContractAt("CreatorFeeModule", cfg.moduleAddress);
+    return mod.owed(recipient);
+}
+
 describe("V4: LumoriaHook fee collection", function () {
     it("buy: exact platform fee → FeeReceiver, exact tax → TaxHandler→module, remainder swaps", async function () {
         const base = await loadFixture(deployBase);
@@ -63,7 +75,6 @@ describe("V4: LumoriaHook fee collection", function () {
         const expectedTax = ((bnbIn - expectedPlatform) * 500n) / BPS;  // 5% of remainder
 
         const feeBefore = await base.feeReceiver.totalReceived();
-        const taxRecipientBefore = await ethers.provider.getBalance(taxRecipient.address);
 
         await expect(
             base.router.connect(user1).swapExactETHForTokensSupportingFeeOnTransferTokens(
@@ -77,9 +88,7 @@ describe("V4: LumoriaHook fee collection", function () {
             .withArgs(tokenAddr, user1.address, bnbIn, expectedPlatform, expectedTax, anyValue);
 
         expect((await base.feeReceiver.totalReceived()) - feeBefore).to.equal(expectedPlatform);
-        expect(
-            (await ethers.provider.getBalance(taxRecipient.address)) - taxRecipientBefore,
-        ).to.equal(expectedTax);
+        expect(await taxOwed(base, tokenAddr, taxRecipient.address)).to.equal(expectedTax);
         expect(await taxHandler.totalBuyTaxReceived()).to.equal(expectedTax);
         expect(await token.balanceOf(user1.address)).to.be.gt(0);
     });
@@ -102,7 +111,6 @@ describe("V4: LumoriaHook fee collection", function () {
         await token.connect(user1).approve(await base.router.getAddress(), tokensToSell);
 
         const feeBefore = await base.feeReceiver.totalReceived();
-        const taxBefore = await ethers.provider.getBalance(taxRecipient.address);
         const receiverBefore = await ethers.provider.getBalance(user2.address);
 
         const tx = await base.router.connect(user1).swapExactTokensForETHSupportingFeeOnTransferTokens(
@@ -127,7 +135,8 @@ describe("V4: LumoriaHook fee collection", function () {
         expect(evTax).to.equal(((gross - evPlatform) * 1000n) / BPS);
 
         expect((await base.feeReceiver.totalReceived()) - feeBefore).to.equal(evPlatform);
-        expect((await ethers.provider.getBalance(taxRecipient.address)) - taxBefore).to.equal(evTax);
+        // buyFee is 0 in this test, so all accrual comes from the sell leg.
+        expect(await taxOwed(base, tokenAddr, taxRecipient.address)).to.equal(evTax);
         expect((await ethers.provider.getBalance(user2.address)) - receiverBefore).to.equal(evBnbOut);
         expect(await taxHandler.totalSellTaxReceived()).to.equal(evTax);
     });
@@ -145,13 +154,10 @@ describe("V4: LumoriaHook fee collection", function () {
         const expectedPlatform = (bnbIn * 100n) / BPS;
         const expectedTax = ((bnbIn - expectedPlatform) * 9800n) / BPS; // 0.9702 BNB
 
-        const taxBefore = await ethers.provider.getBalance(taxRecipient.address);
         await base.router.connect(user1).swapExactETHForTokensSupportingFeeOnTransferTokens(
             0, [ethers.ZeroAddress, tokenAddr], user1.address, await deadline(), { value: bnbIn },
         );
-        expect(
-            (await ethers.provider.getBalance(taxRecipient.address)) - taxBefore,
-        ).to.equal(expectedTax);
+        expect(await taxOwed(base, tokenAddr, taxRecipient.address)).to.equal(expectedTax);
 
         const bought = await token.balanceOf(user1.address);
         expect(bought).to.be.gt(0); // only ~1.98% of the BNB swapped, but it swapped
@@ -192,9 +198,6 @@ describe("V4: LumoriaHook fee collection", function () {
         const bnbIn = ethers.parseEther("1");
         const afterPlatform = bnbIn - bnbIn / 100n;
 
-        const aBefore = await ethers.provider.getBalance(rest[4].address);
-        const bBefore = await ethers.provider.getBalance(rest[5].address);
-
         await base.router.connect(user1).swapExactETHForTokensSupportingFeeOnTransferTokens(
             0, [ethers.ZeroAddress, a.tokenAddr], user1.address, await deadline(), { value: bnbIn },
         );
@@ -202,9 +205,9 @@ describe("V4: LumoriaHook fee collection", function () {
             0, [ethers.ZeroAddress, b.tokenAddr], user1.address, await deadline(), { value: bnbIn },
         );
 
-        expect((await ethers.provider.getBalance(rest[4].address)) - aBefore)
+        expect(await taxOwed(base, a.tokenAddr, rest[4].address))
             .to.equal((afterPlatform * 500n) / BPS);
-        expect((await ethers.provider.getBalance(rest[5].address)) - bBefore)
+        expect(await taxOwed(base, b.tokenAddr, rest[5].address))
             .to.equal((afterPlatform * 2000n) / BPS);
     });
 
@@ -255,7 +258,6 @@ describe("V4: taxes cannot be bypassed (raw PoolManager access)", function () {
         const expectedTax = ((bnbIn - expectedPlatform) * 1000n) / BPS;
 
         const feeBefore = await base.feeReceiver.totalReceived();
-        const taxBefore = await ethers.provider.getBalance(taxRecipient.address);
         const tokenVolBefore = await base.database.tokenVolume(tokenAddr);
 
         await raw.connect(user1).rawSwap(
@@ -265,7 +267,7 @@ describe("V4: taxes cannot be bypassed (raw PoolManager access)", function () {
         );
 
         expect((await base.feeReceiver.totalReceived()) - feeBefore).to.equal(expectedPlatform);
-        expect((await ethers.provider.getBalance(taxRecipient.address)) - taxBefore).to.equal(expectedTax);
+        expect(await taxOwed(base, tokenAddr, taxRecipient.address)).to.equal(expectedTax);
         expect(await token.balanceOf(user1.address)).to.be.gt(0);
 
         // token volume always tracked; per-user attribution impossible without hookData
@@ -288,7 +290,7 @@ describe("V4: taxes cannot be bypassed (raw PoolManager access)", function () {
         await token.connect(user1).approve(await raw.getAddress(), bal);
 
         const feeBefore = await base.feeReceiver.totalReceived();
-        const taxBefore = await ethers.provider.getBalance(taxRecipient.address);
+        const taxBefore = await taxOwed(base, tokenAddr, taxRecipient.address);
 
         await raw.connect(user1).rawSwap(
             key,
@@ -296,7 +298,7 @@ describe("V4: taxes cannot be bypassed (raw PoolManager access)", function () {
         );
 
         expect(await base.feeReceiver.totalReceived()).to.be.gt(feeBefore);
-        expect(await ethers.provider.getBalance(taxRecipient.address)).to.be.gt(taxBefore);
+        expect(await taxOwed(base, tokenAddr, taxRecipient.address)).to.be.gt(taxBefore);
     });
 
     it("exactOutput swaps revert in both directions", async function () {

@@ -174,11 +174,17 @@ describe("TaxHandler", function () {
         it("forwards 100% to a single module", async function () {
             const base = await loadFixture(deployBase);
             const shells = await launchWithSingleCreatorFee(base);
-            // CreatorFeeModule recipient = creator; balance delta checks the forward
-            const before = await ethers.provider.getBalance(base.signers.creator.address);
+            // CreatorFeeModule accrues rather than pushing (see TOKENOMICS_V2 §7.2),
+            // so assert on the module's owed balance, not the recipient's wallet.
+            const cfg = await shells.taxHandler.getModule(0);
+            const mod = await ethers.getContractAt("CreatorFeeModule", cfg.moduleAddress);
+
             await shells.taxHandler.receiveBuyTax({ value: ethers.parseEther("1") });
-            const after = await ethers.provider.getBalance(base.signers.creator.address);
-            expect(after - before).to.equal(ethers.parseEther("1"));
+
+            expect(await mod.owed(base.signers.creator.address)).to.equal(ethers.parseEther("1"));
+            expect(await ethers.provider.getBalance(cfg.moduleAddress)).to.equal(
+                ethers.parseEther("1"),
+            );
         });
 
         it("splits correctly across three modules (6000 / 3000 / 1000)", async function () {
@@ -186,19 +192,18 @@ describe("TaxHandler", function () {
             const { shells, treasuryA, treasuryB } = await launchWithThreeModules(base);
 
             // RewardModule is in BNB mode but has no shares set → pendingBNB accumulates.
-            // Treasuries should each receive their allocation (3000 and 1000 bps).
-            const beforeA = await ethers.provider.getBalance(treasuryA.address);
-            const beforeB = await ethers.provider.getBalance(treasuryB.address);
+            // The two CreatorFeeModules accrue their allocations (3000 and 1000 bps).
+            const cfgA = await shells.taxHandler.getModule(1);
+            const cfgB = await shells.taxHandler.getModule(2);
+            const modA = await ethers.getContractAt("CreatorFeeModule", cfgA.moduleAddress);
+            const modB = await ethers.getContractAt("CreatorFeeModule", cfgB.moduleAddress);
 
             await shells.taxHandler.receiveBuyTax({ value: ethers.parseEther("1") });
 
-            const afterA = await ethers.provider.getBalance(treasuryA.address);
-            const afterB = await ethers.provider.getBalance(treasuryB.address);
-
-            expect(afterA - beforeA).to.equal(ethers.parseEther("0.3"));
-            // Last module receives the remainder to avoid dust; 1 ETH * 1000/10000 = 0.1
-            // Here treasuryB is the last module, so it gets the leftover = 1 - 0.6 - 0.3 = 0.1
-            expect(afterB - beforeB).to.equal(ethers.parseEther("0.1"));
+            expect(await modA.owed(treasuryA.address)).to.equal(ethers.parseEther("0.3"));
+            // The last module with a NON-ZERO allocation sweeps the dust; treasuryB
+            // is that module here, so it gets 1 - 0.6 - 0.3 = 0.1 exactly.
+            expect(await modB.owed(treasuryB.address)).to.equal(ethers.parseEther("0.1"));
         });
 
         it("rejects zero-value tax", async function () {

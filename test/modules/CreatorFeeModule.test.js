@@ -77,7 +77,7 @@ describe("CreatorFeeModule", function () {
             ).to.be.revertedWith("Only taxHandler");
         });
 
-        it("forwards BNB to recipient and emits TaxForwarded", async function () {
+        it("accrues BNB to the recipient and emits TaxAccrued — it does not push", async function () {
             const base = await loadFixture(deployBase);
             const { user1, user2 } = base.signers;
             const mod = await cloneAndInitCreatorFee(base, {
@@ -86,11 +86,15 @@ describe("CreatorFeeModule", function () {
             });
             const before = await ethers.provider.getBalance(user2.address);
             await expect(mod.connect(user1).receiveTax({ value: ethers.parseEther("0.7") }))
-                .to.emit(mod, "TaxForwarded")
-                .withArgs(user2.address, ethers.parseEther("0.7"));
+                .to.emit(mod, "TaxAccrued")
+                .withArgs(user2.address, ethers.parseEther("0.7"), ethers.parseEther("0.7"));
             const after = await ethers.provider.getBalance(user2.address);
-            expect(after - before).to.equal(ethers.parseEther("0.7"));
-            expect(await mod.totalPaid()).to.equal(ethers.parseEther("0.7"));
+
+            // Nothing was pushed — the BNB sits in the module until pulled.
+            expect(after - before).to.equal(0);
+            expect(await mod.owed(user2.address)).to.equal(ethers.parseEther("0.7"));
+            expect(await mod.totalAccrued()).to.equal(ethers.parseEther("0.7"));
+            expect(await mod.totalPaid()).to.equal(0);
         });
 
         it("zero-value calls are a no-op", async function () {
@@ -101,7 +105,95 @@ describe("CreatorFeeModule", function () {
                 recipient: user2,
             });
             await mod.connect(user1).receiveTax({ value: 0 });
-            expect(await mod.totalPaid()).to.equal(0);
+            expect(await mod.totalAccrued()).to.equal(0);
+            expect(await mod.owed(user2.address)).to.equal(0);
+        });
+
+        // Regression: docs/TOKENOMICS_V2.md §7.2. Under the old push-based
+        // receiveTax(), a recipient that could not accept BNB reverted the call,
+        // which reverted the swap, which bricked every trade of the token.
+        it("does NOT revert when the recipient is a contract that cannot receive BNB", async function () {
+            const base = await loadFixture(deployBase);
+            const { user1 } = base.signers;
+
+            const Rejecting = await ethers.getContractFactory("RejectingRecipient");
+            const rejecting = await Rejecting.deploy();
+            await rejecting.waitForDeployment();
+            const rejectingAddr = await rejecting.getAddress();
+
+            const mod = await cloneAndInitCreatorFee(base, {
+                taxHandlerSigner: user1,
+                recipient: { address: rejectingAddr },
+            });
+
+            // The tax path must survive a recipient that rejects BNB.
+            await expect(mod.connect(user1).receiveTax({ value: ethers.parseEther("1") })).to.not.be
+                .reverted;
+            expect(await mod.owed(rejectingAddr)).to.equal(ethers.parseEther("1"));
+
+            // Only the recipient's own withdrawal fails.
+            await expect(rejecting.tryWithdraw(await mod.getAddress())).to.be.revertedWith(
+                "withdraw failed",
+            );
+
+            // And it can recover by handing the stream to an address that can receive.
+            await rejecting.setRecipient(await mod.getAddress(), base.signers.user2.address);
+            expect(await mod.recipient()).to.equal(base.signers.user2.address);
+        });
+    });
+
+    describe("withdraw", function () {
+        it("pays the accrued balance and tracks totalPaid", async function () {
+            const base = await loadFixture(deployBase);
+            const { user1, user2 } = base.signers;
+            const mod = await cloneAndInitCreatorFee(base, {
+                taxHandlerSigner: user1,
+                recipient: user2,
+            });
+            await mod.connect(user1).receiveTax({ value: ethers.parseEther("2") });
+
+            const before = await ethers.provider.getBalance(user2.address);
+            const tx = await mod.connect(user2).withdraw();
+            const receipt = await tx.wait();
+            const gas = receipt.gasUsed * receipt.gasPrice;
+            const after = await ethers.provider.getBalance(user2.address);
+
+            expect(after - before + gas).to.equal(ethers.parseEther("2"));
+            expect(await mod.owed(user2.address)).to.equal(0);
+            expect(await mod.totalPaid()).to.equal(ethers.parseEther("2"));
+        });
+
+        it("reverts when nothing is owed, and on double withdraw", async function () {
+            const base = await loadFixture(deployBase);
+            const { user1, user2, user3 } = base.signers;
+            const mod = await cloneAndInitCreatorFee(base, {
+                taxHandlerSigner: user1,
+                recipient: user2,
+            });
+            await expect(mod.connect(user3).withdraw()).to.be.revertedWith("Nothing owed");
+
+            await mod.connect(user1).receiveTax({ value: ethers.parseEther("1") });
+            await mod.connect(user2).withdraw();
+            await expect(mod.connect(user2).withdraw()).to.be.revertedWith("Nothing owed");
+        });
+
+        it("a recipient change leaves the old recipient's accrual claimable", async function () {
+            const base = await loadFixture(deployBase);
+            const { user1, user2, user3 } = base.signers;
+            const mod = await cloneAndInitCreatorFee(base, {
+                taxHandlerSigner: user1,
+                recipient: user2,
+            });
+            await mod.connect(user1).receiveTax({ value: ethers.parseEther("1") });
+            await mod.connect(user2).setRecipient(user3.address);
+            await mod.connect(user1).receiveTax({ value: ethers.parseEther("3") });
+
+            expect(await mod.owed(user2.address)).to.equal(ethers.parseEther("1"));
+            expect(await mod.owed(user3.address)).to.equal(ethers.parseEther("3"));
+
+            // The old recipient can still pull what it earned before the handover.
+            await expect(mod.connect(user2).withdraw()).to.not.be.reverted;
+            await expect(mod.connect(user3).withdraw()).to.not.be.reverted;
         });
     });
 
