@@ -61,6 +61,7 @@ import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {BeforeSwapDelta, BeforeSwapDeltaLibrary, toBeforeSwapDelta} from "@uniswap/v4-core/src/types/BeforeSwapDelta.sol";
 import {SwapParams, ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {SafeCast} from "@uniswap/v4-core/src/libraries/SafeCast.sol";
+import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
 
 import {IDatabase} from "../interfaces/IDatabase.sol";
 import {ITaxHandler} from "../interfaces/ITaxHandler.sol";
@@ -69,6 +70,7 @@ import {IRebate} from "../interfaces/IRebate.sol";
 
 contract LumoriaHook is BaseHook {
     using SafeCast for uint256;
+    using StateLibrary for IPoolManager;
 
     // ─── Constants ──────────────────────────────────────────────────
 
@@ -80,7 +82,20 @@ contract LumoriaHook is BaseHook {
 
     IDatabase public immutable database;
 
-    // ─── Events (subgraph: same shape as the legacy Router events) ──
+    // ─── Events ─────────────────────────────────────────────────────
+    //
+    // Both trade events carry the POST-SWAP pool price (`sqrtPriceX96`, `tick`),
+    // read from the PoolManager in afterSwap. This makes the hook a complete OHLC
+    // source on its own: one event stream with price, volume, fee breakdown and
+    // per-user attribution, for our pools only.
+    //
+    // Without it the subgraph would have to index the canonical PoolManager's
+    // `Swap` event — a global singleton across every V4 pool on BSC — and discard
+    // everything that isn't ours. Costs ~2.6k gas per swap (one extsload + two
+    // event words) and no storage. See docs/TOKENOMICS_V2.md §13.1.
+    //
+    // NOTE: an event is not readable on-chain. This is a charting source, NOT a
+    // price oracle, and it deliberately does not enable trustless buybacks (§13.2).
 
     event TokenPurchased(
         address indexed token,
@@ -88,7 +103,9 @@ contract LumoriaHook is BaseHook {
         uint256 bnbIn,
         uint256 platformFee,
         uint256 taxTaken,
-        uint256 tokensOut
+        uint256 tokensOut,
+        uint160 sqrtPriceX96,
+        int24 tick
     );
     event TokenSold(
         address indexed token,
@@ -96,7 +113,9 @@ contract LumoriaHook is BaseHook {
         uint256 tokensIn,
         uint256 platformFee,
         uint256 taxTaken,
-        uint256 bnbOut
+        uint256 bnbOut,
+        uint160 sqrtPriceX96,
+        int24 tick
     );
     event LumoriaPoolInitialized(address indexed token, PoolId indexed poolId);
 
@@ -259,6 +278,10 @@ contract LumoriaHook is BaseHook {
         address token = Currency.unwrap(key.currency1);
         address user = _decodeUser(hookData);
 
+        // Post-swap pool price. The hook's own take() moves no price — only the
+        // swap does — so slot0 here is the true post-trade mark.
+        (uint160 sqrtPriceX96, int24 tick,,) = poolManager.getSlot0(key.toId());
+
         if (params.zeroForOne) {
             // BUY — fees were already taken in beforeSwap. Credit rebate,
             // register volume, emit the trade event.
@@ -274,7 +297,7 @@ contract LumoriaHook is BaseHook {
             }
             database.registerVolume(token, user, bnbIn);
 
-            emit TokenPurchased(token, user, bnbIn, platformFee, tax, tokensOut);
+            emit TokenPurchased(token, user, bnbIn, platformFee, tax, tokensOut, sqrtPriceX96, tick);
             return (IHooks.afterSwap.selector, 0);
         }
 
@@ -298,7 +321,9 @@ contract LumoriaHook is BaseHook {
             uint256(-params.amountSpecified),
             platformFee_,
             tax_,
-            bnbOutGross - totalFee
+            bnbOutGross - totalFee,
+            sqrtPriceX96,
+            tick
         );
         // Positive return: the hook takes this much of the unspecified
         // currency (BNB output) — the seller receives the remainder.

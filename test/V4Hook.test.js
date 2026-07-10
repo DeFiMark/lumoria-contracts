@@ -85,7 +85,12 @@ describe("V4: LumoriaHook fee collection", function () {
                 { value: bnbIn },
             ),
         ).to.emit(base.hook, "TokenPurchased")
-            .withArgs(tokenAddr, user1.address, bnbIn, expectedPlatform, expectedTax, anyValue);
+            .withArgs(
+                tokenAddr, user1.address, bnbIn, expectedPlatform, expectedTax,
+                anyValue,  // tokensOut
+                anyValue,  // sqrtPriceX96 — post-swap pool price (§13.1)
+                anyValue,  // tick
+            );
 
         expect((await base.feeReceiver.totalReceived()) - feeBefore).to.equal(expectedPlatform);
         expect(await taxOwed(base, tokenAddr, taxRecipient.address)).to.equal(expectedTax);
@@ -169,6 +174,65 @@ describe("V4: LumoriaHook fee collection", function () {
                 bought, 0, [tokenAddr, ethers.ZeroAddress], user1.address, await deadline(),
             ),
         ).to.emit(base.hook, "TokenSold");
+    });
+
+    // §13.1 — the hook is a self-sufficient OHLC source: its trade events carry the
+    // post-swap pool price, so the subgraph never has to index the canonical
+    // PoolManager and filter every V4 swap on BSC.
+    it("trade events carry the post-swap sqrtPriceX96 + tick, and the price moves the right way", async function () {
+        const base = await loadFixture(deployBase);
+        const { user1, rest } = base.signers;
+
+        const { token, tokenAddr } = await launchTaxedToken(base, {
+            buyFee: 0, sellFee: 0, recipient: rest[7].address,
+        });
+
+        const priceFrom = (receipt, name) => {
+            const log = receipt.logs
+                .map((l) => { try { return base.hook.interface.parseLog(l); } catch { return null; } })
+                .find((p) => p && p.name === name);
+            expect(log, `${name} event`).to.not.equal(undefined);
+            return { sqrtPriceX96: log.args.sqrtPriceX96, tick: log.args.tick };
+        };
+
+        const buy = async () =>
+            priceFrom(
+                await (await base.router.connect(user1).swapExactETHForTokensSupportingFeeOnTransferTokens(
+                    0, [ethers.ZeroAddress, tokenAddr], user1.address, await deadline(),
+                    { value: ethers.parseEther("1") },
+                )).wait(),
+                "TokenPurchased",
+            );
+
+        const first = await buy();
+        expect(first.sqrtPriceX96).to.be.gt(0);
+
+        // Pin the exact formula the subgraph uses (subgraph/src/helpers.ts →
+        // poolPriceBnbPerToken). currency0 = BNB, currency1 = token, both 18dp:
+        //   BNB per token = 2^192 / sqrtPriceX96^2
+        // Seed liquidity is 500M tokens against 100 BNB → ~2e-7 BNB/token.
+        // Asserting this catches an inverted price, which is otherwise invisible.
+        const Q192 = 2n ** 192n;
+        const priceE18 = (Q192 * 10n ** 18n) / (first.sqrtPriceX96 * first.sqrtPriceX96);
+        expect(priceE18).to.be.gt(1n * 10n ** 11n); // > 1e-7 BNB/token
+        expect(priceE18).to.be.lt(4n * 10n ** 11n); // < 4e-7 BNB/token
+
+        // currency0 = BNB, currency1 = token. A buy is zeroForOne, which pushes
+        // sqrtPriceX96 DOWN. Two buys in a row must strictly decrease it.
+        const second = await buy();
+        expect(second.sqrtPriceX96).to.be.lt(first.sqrtPriceX96);
+        expect(second.tick).to.be.lt(first.tick);
+
+        // Selling back reverses the direction.
+        const bal = await token.balanceOf(user1.address);
+        await token.connect(user1).approve(await base.router.getAddress(), bal);
+        const sellReceipt = await (await base.router.connect(user1)
+            .swapExactTokensForETHSupportingFeeOnTransferTokens(
+                bal, 0, [tokenAddr, ethers.ZeroAddress], user1.address, await deadline(),
+            )).wait();
+        const sold = priceFrom(sellReceipt, "TokenSold");
+
+        expect(sold.sqrtPriceX96).to.be.gt(second.sqrtPriceX96);
     });
 
     it("0% token tax: only the platform fee is taken; TaxHandler untouched", async function () {
