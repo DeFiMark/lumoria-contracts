@@ -28,6 +28,8 @@ export const MODULE_REWARD = 0;
 export const MODULE_BURN = 1;
 export const MODULE_LIQUIDITY = 2;
 export const MODULE_CREATOR = 3;
+export const MODULE_PRIZE = 4;
+export const MODULE_MILESTONE = 5;
 
 // time buckets
 export const SECONDS_PER_DAY = 86400;

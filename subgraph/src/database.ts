@@ -14,6 +14,7 @@ import {
   RewardModule as RewardModuleTemplate,
   BurnModule as BurnModuleTemplate,
   LiquidityModule as LiquidityModuleTemplate,
+  MilestoneRewardModule as MilestoneRewardModuleTemplate,
 } from "../generated/templates";
 import {
   Token,
@@ -31,6 +32,7 @@ import {
   MODULE_BURN,
   MODULE_LIQUIDITY,
   MODULE_CREATOR,
+  MODULE_MILESTONE,
   getOrCreateSystemAddresses,
   getOrCreatePlatformConfig,
   getOrCreatePlatformDayData,
@@ -177,6 +179,11 @@ function hydrateModuleSpecifics(module: Module, mAddr: Address, mType: i32): voi
     module.totalBnbSpent = ZERO_BI;
   } else if (mType == MODULE_LIQUIDITY) {
     module.totalLpLocked = ZERO_BI;
+  } else if (mType == MODULE_MILESTONE) {
+    module.totalReleased = ZERO_BI;
+    // The module's __init__ ran in this same tx, so its 18-month clock
+    // started now — no contract call needed.
+    module.lastReleaseTime = module.addedAt;
   }
   // interval / lastExecuted left null — the frontend reads them live, and
   // IntervalUpdated / Burn|LiquidityExecuted events fill them as they fire.
@@ -191,6 +198,8 @@ function spawnModuleTemplate(mType: i32, mAddr: Address, ctx: DataSourceContext)
     BurnModuleTemplate.createWithContext(mAddr, ctx);
   } else if (mType == MODULE_LIQUIDITY) {
     LiquidityModuleTemplate.createWithContext(mAddr, ctx);
+  } else if (mType == MODULE_MILESTONE) {
+    MilestoneRewardModuleTemplate.createWithContext(mAddr, ctx);
   }
 }
 

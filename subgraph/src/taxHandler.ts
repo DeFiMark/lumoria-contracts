@@ -17,6 +17,7 @@ import {
   RewardModule as RewardModuleTemplate,
   BurnModule as BurnModuleTemplate,
   LiquidityModule as LiquidityModuleTemplate,
+  MilestoneRewardModule as MilestoneRewardModuleTemplate,
 } from "../generated/templates";
 import {
   Token,
@@ -33,6 +34,7 @@ import {
   MODULE_BURN,
   MODULE_LIQUIDITY,
   MODULE_CREATOR,
+  MODULE_MILESTONE,
   eventId,
   getOrCreateModule,
 } from "./helpers";
@@ -148,6 +150,10 @@ export function handleModuleAdded(event: ModuleAdded): void {
     let md = rm.try_minDistribution();
     m.minDistribution = md.reverted ? ZERO_BI : md.value;
     m.totalDividendsDistributed = ZERO_BI;
+  } else if (mType == MODULE_MILESTONE) {
+    m.totalReleased = ZERO_BI;
+    // __init__ ran in this same tx — the 18-month clock starts now.
+    m.lastReleaseTime = event.block.timestamp;
   }
   m.save();
 
@@ -166,6 +172,7 @@ export function handleModuleAdded(event: ModuleAdded): void {
   else if (mType == MODULE_REWARD) RewardModuleTemplate.createWithContext(mAddr, ctx);
   else if (mType == MODULE_BURN) BurnModuleTemplate.createWithContext(mAddr, ctx);
   else if (mType == MODULE_LIQUIDITY) LiquidityModuleTemplate.createWithContext(mAddr, ctx);
+  else if (mType == MODULE_MILESTONE) MilestoneRewardModuleTemplate.createWithContext(mAddr, ctx);
 
   moduleEvent(event, tokenId, "added", mAddr, mType, event.params.buyAlloc, event.params.sellAlloc);
 }

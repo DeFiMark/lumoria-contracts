@@ -23,6 +23,7 @@ const CONTRACTS = {
   RewardModule: "modules/RewardModule.sol/RewardModule.json",
   BurnModule: "modules/BurnModule.sol/BurnModule.json",
   LiquidityModule: "modules/LiquidityModule.sol/LiquidityModule.json",
+  MilestoneRewardModule: "modules/MilestoneRewardModule.sol/MilestoneRewardModule.json",
 };
 
 if (!fs.existsSync(OUT)) fs.mkdirSync(OUT, { recursive: true });

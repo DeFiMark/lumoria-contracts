@@ -126,7 +126,7 @@ type Module @entity {
   id: ID! # module address
   token: Token!
   taxHandler: Bytes!
-  moduleType: Int! # 0..3
+  moduleType: Int! # 0..5
   buyAllocation: BigInt!
   sellAllocation: BigInt!
   active: Boolean!
@@ -142,8 +142,11 @@ type Module @entity {
   totalWithdrawnBnb: BigInt! # Creator: totalReceivedBnb - this = currently claimable
   interval: BigInt # Burn/Liquidity (call-hydrated; then IntervalUpdated)
   lastExecuted: BigInt # Burn/Liquidity
+  totalReleased: BigInt # Milestone
+  lastReleaseTime: BigInt # Milestone — the 18-month public valve measures from here
   accruals: [CreatorFeeAccrual!]! @derivedFrom(field: "module")
   withdrawals: [CreatorFeeWithdrawal!]! @derivedFrom(field: "module")
+  releases: [MilestoneRelease!]! @derivedFrom(field: "module")
 }
 
 type PendingChange @entity {
@@ -228,6 +231,21 @@ type CreatorFeeWithdrawal @entity(immutable: true) {
   module: Module!
   recipient: Bytes!
   amount: BigInt!
+  timestamp: BigInt!
+}
+
+# A MilestoneRewardModule release. `reason` is the team's public, timestamped,
+# immutable claim about which milestone was hit — surface it verbatim on the
+# token page; it is the accountability record. `by` distinguishes creator
+# releases from the 18-month public valve.
+type MilestoneRelease @entity(immutable: true) {
+  id: ID!
+  module: Module!
+  by: Bytes!
+  rewardModule: Bytes!
+  amount: BigInt!
+  remaining: BigInt!
+  reason: String!
   timestamp: BigInt!
 }
 

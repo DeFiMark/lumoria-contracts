@@ -340,6 +340,27 @@ templates:
         - event: IntervalUpdated(uint256,uint256)
           handler: handleLiquidityIntervalUpdated
 
+  # ─── MilestoneRewardModule (type 5) ────────────────────────────────
+  - kind: ethereum
+    name: MilestoneRewardModule
+    network: bsc
+    source:
+      abi: MilestoneRewardModule
+    mapping:
+      kind: ethereum/events
+      apiVersion: 0.0.9
+      language: wasm/assemblyscript
+      file: ./src/milestoneRewardModule.ts
+      entities: [Module, MilestoneRelease]
+      abis:
+        - name: MilestoneRewardModule
+          file: ./abis/MilestoneRewardModule.json
+      eventHandlers:
+        - event: TaxReceived(uint256,uint256)
+          handler: handleMilestoneTaxReceived
+        - event: RewardsReleased(indexed address,indexed address,uint256,uint256,string)
+          handler: handleRewardsReleased
+
   # ─── FlatCurve (one per raise) ─────────────────────────────────────
   - kind: ethereum
     name: FlatCurve
