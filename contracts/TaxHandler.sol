@@ -211,25 +211,43 @@ contract TaxHandler is ITaxHandler, ReentrancyGuard {
     }
 
     /// @dev Distributes `amount` BNB across modules according to each module's
-    ///      buy or sell allocation (bps). The last module receives the full
-    ///      remainder so integer-division dust never gets stuck in this contract.
+    ///      buy or sell allocation (bps).
+    ///
+    ///      Integer-division dust is swept to the LAST module with a NON-ZERO
+    ///      allocation on this side — not simply the last module in the array.
+    ///      A zero-allocation module (the natural configuration for a
+    ///      default RewardModule funded only by donations) must never silently
+    ///      collect dust it was not allocated.
+    ///
+    ///      Shares are computed into memory first so each module's allocation is
+    ///      read from storage exactly once, and so the sweep target is known
+    ///      before any external call is made.
     function _distribute(uint256 amount, bool isBuy) internal {
         uint256 len = modules.length;
         if (len == 0) return;
 
+        uint256[] memory payouts = new uint256[](len);
         uint256 distributed;
+        uint256 sweepIdx = type(uint256).max;
+
         for (uint256 i = 0; i < len; i++) {
             ModuleConfig storage m = modules[i];
-            uint256 share;
-            if (i == len - 1) {
-                share = amount - distributed;
-            } else {
-                uint256 alloc = isBuy ? m.buyAllocation : m.sellAllocation;
-                share = (amount * alloc) / BPS;
-                distributed += share;
-            }
-            if (share > 0) {
-                IModule(m.moduleAddress).receiveTax{value: share}();
+            uint256 alloc = isBuy ? m.buyAllocation : m.sellAllocation;
+            if (alloc == 0) continue;
+
+            uint256 share = (amount * alloc) / BPS;
+            payouts[i] = share;
+            distributed += share;
+            sweepIdx = i;
+        }
+
+        // The sum == 10000 invariant guarantees at least one non-zero allocation.
+        if (sweepIdx == type(uint256).max) return;
+        payouts[sweepIdx] += amount - distributed;
+
+        for (uint256 i = 0; i < len; i++) {
+            if (payouts[i] > 0) {
+                IModule(modules[i].moduleAddress).receiveTax{value: payouts[i]}();
             }
         }
     }
