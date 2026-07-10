@@ -40,6 +40,20 @@ contract TaxHandler is ITaxHandler, ReentrancyGuard {
     uint256 public constant BPS = 10000;
     uint256 public constant MAX_FEE = 9800;          // 98% hard cap per side
     uint256 public constant CHANGE_DELAY = 24 hours; // timelock for adverse changes
+
+    /// @dev Ceiling on how far a SINGLE proposal may raise a fee. Launch fees are
+    ///      unconstrained (they are public at launch and set in `__init__`), but
+    ///      post-launch escalation is deliberately slow and loud: climbing from 5%
+    ///      to the 98% cap takes ~10 sequential proposals, each carrying its own
+    ///      24h public notice — about ten days of unambiguous on-chain intent.
+    ///      A single notice can be missed by a sleeping holder; ten cannot.
+    ///
+    ///      The cap is checked against the CURRENT fee at propose time, and the
+    ///      current fee cannot move between propose and execute: the only other
+    ///      path that writes it (the instant-decrease path above) cancels any
+    ///      pending change. So the bound holds at execution too.
+    ///      See docs/TOKENOMICS_V2.md §7.7.
+    uint256 public constant MAX_FEE_INCREASE_PER_CHANGE = 1000; // +10 percentage points per change
     uint256 public constant MAX_MODULES = 10;        // gas ceiling on distribution loop
 
     // module type enum (matches Database.moduleMasterCopies keys)
@@ -322,6 +336,19 @@ contract TaxHandler is ITaxHandler, ReentrancyGuard {
 
     // ─── Fee Change Timelock ────────────────────────────────────────
 
+    /// @notice Propose new buy/sell fees.
+    ///
+    ///         A fee can never rise without 24h of public on-chain notice
+    ///         (`FeeChangeProposed` → wait → `executeFeeChange`), and no single
+    ///         proposal may raise a fee by more than `MAX_FEE_INCREASE_PER_CHANGE`.
+    ///         Decreases apply instantly — they cannot harm a holder, and the
+    ///         instant path is the safety valve for a fee misconfigured at launch.
+    ///
+    /// @dev The instant path CANCELS any armed increase. Without that, a creator
+    ///      could arm 98%, immediately drop to 0% so every UI reads "0% fees", let
+    ///      buyers in, and execute the armed increase a day later. Every step would
+    ///      be technically public while nothing surfaced it. A new proposal always
+    ///      supersedes the old one. See docs/TOKENOMICS_V2.md §7.6.
     function proposeFeeChange(uint256 newBuyFee, uint256 newSellFee) external override onlyCreator {
         require(!managementRenounced, "Renounced");
         require(newBuyFee <= MAX_FEE && newSellFee <= MAX_FEE, "Fee exceeds max");
@@ -332,9 +359,20 @@ contract TaxHandler is ITaxHandler, ReentrancyGuard {
             uint256 oldSell = _sellFee;
             _buyFee = newBuyFee;
             _sellFee = newSellFee;
+
+            // Supersede — never leave an armed increase behind a visible decrease.
+            if (pendingFeeChange.pending) {
+                pendingFeeChange.pending = false;
+                emit FeeChangeCancelled();
+            }
+
             emit FeesUpdated(oldBuy, newBuyFee, oldSell, newSellFee);
             return;
         }
+
+        // Adverse path: at least one fee is rising. Bound the step size.
+        require(newBuyFee <= _buyFee + MAX_FEE_INCREASE_PER_CHANGE, "Buy increase too large");
+        require(newSellFee <= _sellFee + MAX_FEE_INCREASE_PER_CHANGE, "Sell increase too large");
 
         pendingFeeChange = PendingFeeChange({
             newBuyFee: newBuyFee,

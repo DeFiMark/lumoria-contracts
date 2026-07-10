@@ -276,6 +276,105 @@ describe("TaxHandler", function () {
                 shells.taxHandler.connect(base.signers.creator).executeFeeChange(),
             ).to.be.revertedWith("No pending change");
         });
+
+        // ─── §7.6 — the bait-and-switch ─────────────────────────────
+        //
+        // Regression: an instant fee DECREASE used to leave an armed fee INCREASE
+        // in place. A creator could arm the max, instantly drop to 0% so every UI
+        // read "0% fees", let buyers in, then execute the armed increase 24h later.
+
+        it("an instant decrease disarms a pending increase (§7.6)", async function () {
+            const base = await loadFixture(deployBase);
+            const { creator } = base.signers;
+            const shells = await launchWithSingleCreatorFee(base); // 500 / 500
+
+            // 1. Arm an increase. Public, 24h clock starts.
+            await shells.taxHandler.connect(creator).proposeFeeChange(1500, 1500);
+            expect((await shells.taxHandler.pendingFeeChange()).pending).to.equal(true);
+
+            // 2. Instantly drop to 0%. The token page now reads "0% / 0%".
+            await expect(shells.taxHandler.connect(creator).proposeFeeChange(0, 0))
+                .to.emit(shells.taxHandler, "FeeChangeCancelled")
+                .and.to.emit(shells.taxHandler, "FeesUpdated")
+                .withArgs(500, 0, 500, 0);
+
+            expect(await shells.taxHandler.buyFee()).to.equal(0);
+            expect((await shells.taxHandler.pendingFeeChange()).pending).to.equal(false);
+
+            // 3. A day later the armed increase must be gone, not executable.
+            await time.increase(ONE_DAY);
+            await expect(
+                shells.taxHandler.connect(creator).executeFeeChange(),
+            ).to.be.revertedWith("No pending change");
+            expect(await shells.taxHandler.buyFee()).to.equal(0);
+            expect(await shells.taxHandler.sellFee()).to.equal(0);
+        });
+
+        it("an equal-fee 'decrease' also disarms a pending increase (§7.6)", async function () {
+            const base = await loadFixture(deployBase);
+            const { creator } = base.signers;
+            const shells = await launchWithSingleCreatorFee(base);
+
+            await shells.taxHandler.connect(creator).proposeFeeChange(1200, 1200);
+            // Re-proposing the *current* fees takes the instant path (<=), so it
+            // must supersede too — otherwise it is a silent no-op that leaves the
+            // increase armed.
+            await shells.taxHandler.connect(creator).proposeFeeChange(500, 500);
+            expect((await shells.taxHandler.pendingFeeChange()).pending).to.equal(false);
+        });
+
+        // ─── §7.7 — bounded escalation ──────────────────────────────
+
+        it("rejects a single increase larger than MAX_FEE_INCREASE_PER_CHANGE (§7.7)", async function () {
+            const base = await loadFixture(deployBase);
+            const { creator } = base.signers;
+            const shells = await launchWithSingleCreatorFee(base); // 500 / 500
+
+            expect(await shells.taxHandler.MAX_FEE_INCREASE_PER_CHANGE()).to.equal(1000);
+
+            await expect(
+                shells.taxHandler.connect(creator).proposeFeeChange(1501, 500),
+            ).to.be.revertedWith("Buy increase too large");
+
+            await expect(
+                shells.taxHandler.connect(creator).proposeFeeChange(500, 1501),
+            ).to.be.revertedWith("Sell increase too large");
+
+            // The 5% -> 98% one-shot rug is now impossible.
+            await expect(
+                shells.taxHandler.connect(creator).proposeFeeChange(9800, 9800),
+            ).to.be.revertedWith("Buy increase too large");
+        });
+
+        it("allows an increase of exactly the cap, and a mixed up/down proposal", async function () {
+            const base = await loadFixture(deployBase);
+            const { creator } = base.signers;
+            const shells = await launchWithSingleCreatorFee(base); // 500 / 500
+
+            // buy +1000 (exactly the cap), sell down to 100 — still the adverse path.
+            await shells.taxHandler.connect(creator).proposeFeeChange(1500, 100);
+            await time.increase(ONE_DAY);
+            await shells.taxHandler.connect(creator).executeFeeChange();
+            expect(await shells.taxHandler.buyFee()).to.equal(1500);
+            expect(await shells.taxHandler.sellFee()).to.equal(100);
+        });
+
+        it("escalation is possible but slow: each step needs its own 24h notice (§7.7)", async function () {
+            const base = await loadFixture(deployBase);
+            const { creator } = base.signers;
+            const shells = await launchWithSingleCreatorFee(base); // 500
+
+            // Climb 500 -> 3500 the only way it can be climbed: three public steps.
+            for (const target of [1500, 2500, 3500]) {
+                await shells.taxHandler.connect(creator).proposeFeeChange(target, target);
+                await expect(
+                    shells.taxHandler.connect(creator).executeFeeChange(),
+                ).to.be.revertedWith("Timelock active");
+                await time.increase(ONE_DAY);
+                await shells.taxHandler.connect(creator).executeFeeChange();
+                expect(await shells.taxHandler.buyFee()).to.equal(target);
+            }
+        });
     });
 
     describe("module change timelock — batch proposals", function () {
