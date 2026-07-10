@@ -94,7 +94,7 @@ Lumoria is a **curated token launchpad** with **modular tokenomics**, whose liqu
 | `LiquidityModule.sol` | Auto-liquidity: sells half of tokens, pairs with received BNB, adds to LP | **DONE** |
 | `CreatorFeeModule.sol` | Sends collected BNB directly to the token creator | **DONE** |
 | `MilestoneRewardModule.sol` | Accrues tax; creator releases any amount to ALL holders via the RewardModule, milestone recorded as free text. 18-month public-release valve. (TOKENOMICS_V2 §2B) | **DONE** |
-| `PrizePool.sol` | Buyers earn tickets per epoch; merkle-settled pro-rata / lottery / all-holders payouts (TOKENOMICS_V2 §2) | **SPEC** |
+| `PrizePool.sol` | Buyers earn tickets per epoch; merkle-settled pro-rata / lottery / all-holders payouts (TOKENOMICS_V2 §2, impl notes §2.12) | **DONE** |
 | `RebateContract.sol` | Holds token supply funded by creator, credits rebates to buyers on DEX purchases | **DONE** |
 
 ### Launch Modes
@@ -745,6 +745,33 @@ Events:
 ```
 
 **No withdrawal path of any kind** — no withdraw, no recipient, no sweep, no owner. The creator's discretion is over timing and amount, never destination. The test suite pins the external surface as an allowlist so any added function fails review loudly. `renounceManagement()` does not disable releases (`creator()` is fixed at launch).
+
+### 6.6 PrizePool (Type 4)
+**Purpose**: Buyers earn tickets during an epoch; the accrued tax pot pays out pro-rata by BNB spent, by weighted lottery (≤10 winners), or to all holders via the RewardModule. Full spec: [`TOKENOMICS_V2.md`](./TOKENOMICS_V2.md) §2; implementation notes §2.12.
+
+```
+The frozen-layer trick: ticket data is reconstructed OFF-CHAIN from the hook's
+TokenPurchased event and settled on-chain via a merkle root — zero changes to
+LumoriaHook / ITaxHandler / IModule, so already-launched tokens can adopt it.
+
+Flow per epoch (PRO_RATA / LOTTERY):
+1. receiveTax() buckets BNB by timestamp-derived epoch (O(1), accrue-only).
+2. rootPoster calls postRoot(epochId, root, totalWeight, ticketCount) after the
+   epoch ends. Thin/empty epochs roll the pot to the live epoch instead.
+3. 6h challenge window — Database.owner() may invalidateRoot (pot rolls over).
+4. LOTTERY: anyone calls drawRandomness (bounty-paid) → provider resolved from
+   Database.randomnessProvider → fulfillRandomness stores the word. Withheld
+   reveal? rolloverStaleRandomness after 3 days.
+5. Claims: pull-based, O(1). claim() verifies the pro-rata leaf;
+   claimLottery() verifies the ticket leaf + the slot range check
+   cumBefore <= r < cumBefore+weight. Hold requirement enforced on both.
+6. sweepUnclaimed() rolls the post-window remainder to the live epoch.
+
+ALL_HOLDERS: no root — permissionless settleAllHolders() donates the pot to the
+RewardModule (rolls over if none exists).
+```
+
+**Order is load-bearing**: root → challenge window → randomness → claims. Every failure path rolls the pot to the live epoch; no BNB is ever stranded. Payouts are never pushed. Merkle verification lives in the vendored `lib/MerkleProof.sol`; the JS mirror (`scripts/lib/merkle.js`) is shared by tests and operator tooling.
 
 ### Module Interface
 ```solidity

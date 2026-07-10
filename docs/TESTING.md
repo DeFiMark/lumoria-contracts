@@ -42,7 +42,11 @@ lumoria-contracts/
 │       ├── RewardModule.test.js   ← BNB and token modes (uses Lumoria router as external)
 │       ├── BurnModule.test.js     ← config/guards + end-to-end executeBurn (real V4 swap)
 │       ├── LiquidityModule.test.js← config/guards + end-to-end executeLiquidity (vault lock)
-│       └── MilestoneRewardModule.test.js ← destination lock, 18-month valve, real-swap invariant
+│       ├── MilestoneRewardModule.test.js ← destination lock, 18-month valve, real-swap invariant
+│       └── PrizePool.test.js      ← epoch math, root-before-randomness ordering, merkle claims,
+│   │                                 lottery range check, rollover matrix, challenge window
+│   ├── operator/
+│   │   └── Settlement.test.js     ← closed loop: real buys → tickets.js derivation → root → claim
 └── contracts/
     └── test-mocks/
         ├── MockWBNB.sol           ← minimal WETH9 stand-in (legacy path marker only)
@@ -148,6 +152,8 @@ Operators are **platform-wide**, not part of any init payload: `database.setOper
 | `BurnModule.sol` | ✅ | ✅ | config + guards + end-to-end `executeBurn` via a real V4 swap, **slippage floor + deadline + operator window & liveness fallback (V2 §6.2)**, **buyback tax re-enters `receiveTax` and terminates** |
 | `LiquidityModule.sol` | ✅ | ✅ | config + guards + end-to-end `executeLiquidity` (vault-locked liquidity), **slippage floors + deadline (V2 §6.2)** |
 | `MilestoneRewardModule.sol` | ✅ | ✅ | init guards, taxHandler-only accrual, creator-only release + `No reward module` + renounce-immunity, **destination lock pinned as an ABI allowlist**, full-supply-holder claim + system-contract exclusion, **18-month public valve (open/reset/full-balance/empty-revert)**, real V4 buy+sell drives `receiveTax` (swap-path invariant) |
+| `PrizePool.sol` | ✅ | ✅ | init bounds, epoch math (multi-epoch jumps, queued length applies only at the next boundary), **`drawRandomness` before `postRoot` reverts** + challenge-window ordering, merkle claims (forged leaf, cross-epoch replay, someone-else's-proof all fail), **lottery range check (adjacent rejected, duplicate slot rejected, same account × two slots accepted)**, hold requirement (dump→revert, hold→pay), **full §2.8 rollover matrix — no BNB stranded**, `invalidateRoot` window, ALL_HOLDERS delegation to `donate()`, bounties, real V4 buy/sell cycle cannot revert |
+| operator loop (`tickets.js` + `merkle.js`) | ✅ | ✅ | real router buys → log-derived tickets (unattributed + module-flow buys excluded) → root → on-chain claims at exact pro-rata amounts |
 | `v4/LumoriaHook.sol` | ✅ | ✅ | **post-swap `sqrtPriceX96`/`tick` on both trade events, with the exact `2^192/sqrt^2` price formula pinned numerically**, buy/sell fee math to the wei, 98% + 0% taxes, multi-pool isolation, exactOut rejection, **bypass-proofing via raw PoolManager swaps**, pool-creation/liquidity/donate gates, rebate + volume attribution |
 | `v4/LumoriaLiquidityVault.sol` | ✅ | ✅ | router-only entry, lazy pool init at implied price, locked-liquidity growth, dust refunds (implicit in module flows) |
 | `v4/LumoriaSwapRouter.sol` | ✅ | ✅ | buy/sell exactIn, amountOutMin + deadline guards, addLiquidityETH delegation, non-Lumoria rejection |
@@ -165,7 +171,7 @@ Operators are **platform-wide**, not part of any init payload: `database.setOper
 
 ### Blocked — add tests once unblocked
 
-None currently. All Phase 1-5 contracts — plus the Phase-6 vesting/allocations/renounce work (incl. the rebate renounce-freeze), the Tokenomics-V2 Phase-A substrate changes, and the Phase-B MilestoneRewardModule + randomness provider — are under test (**255 tests green**).
+None currently. All Phase 1-5 contracts — plus the Phase-6 vesting/allocations/renounce work (incl. the rebate renounce-freeze), the Tokenomics-V2 Phase-A substrate changes, and the entire Phase B (MilestoneRewardModule, randomness provider, PrizePool, operator settlement loop) — are under test (**285 tests green**).
 
 ---
 

@@ -24,7 +24,7 @@ Phase 3: DEX Refactor             ✅ DONE   (superseded by Phase 5)
 Phase 4: Launch System            ✅ DONE
 Phase 5: Uniswap V4 Migration     ✅ DONE
 Phase 6: Pre-Beta Frontend Align  ✅ DONE
-Phase 7: Tokenomics V2 modules    🟡 IN PROGRESS (Phase A ✅; B1 Milestone ✅; B2/B3/B4 in flight)
+Phase 7: Tokenomics V2 modules    ✅ DONE (Phase A + B1 Milestone + B2 Randomness + B3 PrizePool + B4 subgraph/operators)
 ```
 
 **All six phases complete.** Phase 5 replaced the custom V2-style DEX (Factory/Pair/Router) with Uniswap V4 pools + a LumoriaHook that enforces the entire fee stack at the pool level. Phase 6 closed the frontend drift audit (`docs/CONTRACTS_SUBGRAPH_DRIFT_REPORT.md`) by building the three genuinely-missing capabilities — token **vesting** + custom **allocations** + management **renounce** — and documenting the many capabilities that already existed but were mis-described to the frontend (see `docs/CONTRACTS_DRIFT_RESOLUTION.md`). **175 tests green; deploy + smoke validated locally.** Remaining pre-mainnet work: a real **security audit** (the hook handles up to 98% of swap flow — see DESIGN.md §14, now also covering `VestingVault`), the **subgraph** (hook/vault/vesting events — see FRONTEND.md / SUBGRAPH.md), and final frontend integration (V4Quoter quoting, Universal Router support). Deployment scripts live in `scripts/` (see [TESTING.md § Deployment](./TESTING.md#deployment-scripts)).
@@ -184,12 +184,18 @@ Phase-A close.
   (commit–reveal + blockhash mixing, consumer-scoped keys — V2 §3.2b) +
   `MockRandomness`. Registered at `Database.randomnessProvider`. 14 tests
   (`test/TrustedOperatorRandomness.test.js`).
-- ⬜ **B3 · PrizePool (type 4)** — epoch bucketing, off-chain tickets from
-  `TokenPurchased`, merkle settlement (root **before** randomness), three payout
-  modes, pull claims, rollover. Spec: TOKENOMICS_V2 §2.
-- ⬜ **B4 · Subgraph + operator scripts** for both (milestone template shipped
-  with B1; PrizePool template + ticket derivation + settle/randomness scripts
-  land with B3).
+- ✅ **B3 · PrizePool (type 4)** — `contracts/modules/PrizePool.sol` + vendored
+  `lib/MerkleProof.sol`. Epoch bucketing, off-chain tickets from
+  `TokenPurchased`, merkle settlement (root **before** randomness, 6h challenge
+  window), three payout modes, pull claims, rollover-never-strand. 28 tests +
+  implementation notes in TOKENOMICS_V2 §2.12.
+- ✅ **B4 · Subgraph + operator scripts** — PrizePool + Milestone templates,
+  reference ticket derivation (`subgraph/src/prize.ts` — PrizeEpoch stores
+  posted AND independently-derived totals), operator tooling
+  (`scripts/operator/settle-prizepool.js`, `scripts/operator/randomness.js`)
+  sharing `scripts/lib/merkle.js` with the tests, and a closed-loop test
+  (`test/operator/Settlement.test.js`) proving hook logs → derivation → root →
+  on-chain claim agree.
 
 ---
 

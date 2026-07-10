@@ -353,6 +353,36 @@ Accrues tax BNB; the creator releases any amount to **all holders** (via the tok
 
 ---
 
+### 2.8c PrizePool 🟢
+
+Buyers earn tickets per epoch (weight = BNB spent through the Lumoria router); the pot pays out pro-rata, by weighted lottery, or to all holders. Spec: `TOKENOMICS_V2.md` §2 + §2.12. **Third-party-router buys are unattributed and earn no tickets — surface this as the incentive to trade through Lumoria.**
+
+**Reads:** `payoutMode` (0/1/2), `epochLength`, `pendingEpochLength`, `currentEpochId`, `currentEpochStart`, `liveEpochId()` (what the next tax would bucket into), `epochPot(epochId)`, `settlements(epochId)` → `(root, totalWeight, ticketCount, pot, paidOut, rootPostedAt, randomFulfilledAt, randomWord, randProvider, randomnessRequested, randomnessFulfilled, rolledOver, settled, swept)`, `claimed(epochId, account)`, `slotClaimed(epochId, slot)`, `winnerCount`, `holdRequirementBps`, `maxWeightBps`, `minPot`, `minParticipants`, `settleBountyBps`, `rootPoster`, constants (`CHALLENGE_WINDOW` 6h, `RANDOMNESS_DEADLINE` 3d, `CLAIM_WINDOW` 30d), `getStats()`.
+
+**Writes:**
+- `receiveTax()` payable — TaxHandler only.
+- `setEpochLength(newLength)` — creator only; queues, applies at the next boundary.
+- `postRoot(epochId, root, totalWeight, ticketCount)` — `rootPoster` only (operator backend).
+- `invalidateRoot(epochId)` — `Database.owner()` only, inside the 6h window.
+- `drawRandomness(epochId)` — anyone, after the window (bounty-paid). LOTTERY only.
+- `rolloverStaleRandomness(epochId)` — anyone, 3 days after root if no reveal.
+- `claim(epochId, weight, tokensBought, proof)` — pro-rata claimant. Proof from the operator settlement JSON / subgraph-derived tree.
+- `claimLottery(epochId, slot, index, weight, cumBefore, tokensBought, proof)` — lottery winner.
+- `settleAllHolders(epochId)` — anyone (bounty-paid). ALL_HOLDERS only.
+- `sweepUnclaimed(epochId)` — anyone, after the 30-day claim window.
+
+**Events:** `TaxReceived(epochId, amount)`, `EpochLengthQueued/Applied`, `RootPosted(epochId, root, totalWeight, ticketCount)`, `RootInvalidated(epochId)`, `RandomnessRequested/Fulfilled`, `PrizeClaimed(epochId, account, amount)`, `LotteryClaimed(epochId, slot, winner, amount)`, `PotRolledOver(fromEpoch, toEpoch, amount, reason)`, `DonatedToRewards(epochId, rewardModule, amount)`, `SettleBountyPaid(epochId, to, amount)`.
+
+**Subgraph:** `PrizeEpoch` (pot, posted vs **independently derived** totals, root, randomWord, rollover state), `PrizeTicket` (the reference ticket list — this is what proofs are built from), `PrizeClaim`. `Token.prizePool` points at the active instance.
+
+**UI surfaces:**
+- **Token page "Prize" card**: live epoch countdown (`currentEpochStart + epochLength`), current pot, mode, ticket leaderboard from `PrizeTicket`.
+- **Post-epoch**: settlement status timeline (root posted → challenge window countdown → draw → claims open → claim deadline). Show BOTH posted and derived totals; highlight any mismatch (that is the fraud alarm).
+- **Claim flow**: fetch the claimant's entry + proof (operator settlement JSON via `OUT=`, or rebuild from `PrizeTicket` with `scripts/lib/merkle.js` semantics), then `claim`/`claimLottery`. Warn when `holdRequirementBps > 0` and the wallet balance is below `tokensBought * bps / 10000` — the claim will revert `"Sold before claim"`.
+- ⚠️ `maxWeightBps` (lottery weight cap) is applied at ROOT BUILD, not on-chain — display capped weights from the settlement file, not raw `PrizeTicket.weight`, once the root is posted.
+
+---
+
 ### 2.9 LumoriaHook + Uniswap V4 PoolManager 🟢
 
 Trading lives in the canonical Uniswap V4 PoolManager (BSC: `0x28e2ea090877bf75740558f6bfb36a5ffee9e9df`). The **LumoriaHook** runs on every swap — any router — and is the source of truth for trades, fees, rebates, and volume.

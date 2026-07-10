@@ -42,7 +42,7 @@ Lumoria is a **factory system**: a handful of singletons, plus per-launch contra
 1 = BURN       (BurnModule)
 2 = LIQUIDITY  (LiquidityModule)
 3 = CREATOR    (CreatorFeeModule)
-4 = PRIZE      (PrizePool — spec'd, template pending)
+4 = PRIZE      (PrizePool)
 5 = MILESTONE  (MilestoneRewardModule)
 ```
 `ModuleAdded.moduleType` selects which template to spawn. Launch mode enum: `0 = BYOL`, `1 = FLAT_CURVE`. Module change type: `0 = ADD`, `1 = REMOVE`, `2 = UPDATE`.
@@ -248,6 +248,34 @@ Spawn the matching template in the `ModuleAdded` handler (and via call-hydration
 | `TaxReceived` | `(uint256 amount, uint256 pendingBNB)` | inflow |
 | `LiquidityAdded` | `(uint256 bnbAmount, uint256 tokenAmount, uint256 lpTokens, uint256 timestamp)` | auto-LP history (`lpTokens` = V4 liquidity units locked in the vault) |
 | `IntervalUpdated` | `(uint256 oldInterval, uint256 newInterval)` | cadence audit |
+
+**PrizePool (type 4):**
+| Event | Signature | Use |
+|---|---|---|
+| `TaxReceived` | `(uint256 indexed epochId, uint256 amount)` | `PrizeEpoch.pot`; `Module.totalReceivedBnb` |
+| `EpochLengthQueued` / `EpochLengthApplied` | `(uint256)` / `(uint256 indexed epochId, uint256 newLength)` | keep the epoch mirror in sync (see below) |
+| `RootPosted` | `(uint256 indexed epochId, bytes32 root, uint256 totalWeight, uint256 ticketCount)` | the operator's claim — store next to the DERIVED totals |
+| `RootInvalidated` | `(uint256 indexed epochId)` | fraud alarm fired during the challenge window |
+| `RandomnessFulfilled` | `(uint256 indexed epochId, uint256 randomWord)` | lottery word |
+| `PrizeClaimed` / `LotteryClaimed` | `(epochId, account, amount)` / `(epochId, slot, winner, amount)` | `PrizeClaim`; `PrizeEpoch.paidOut` |
+| `PotRolledOver` | `(uint256 indexed fromEpoch, uint256 indexed toEpoch, uint256 amount, string reason)` | mark from-epoch rolled over **unless reason == "unclaimed"** (a sweep — the epoch settled fine); credit to-epoch pot |
+| `DonatedToRewards` | `(uint256 indexed epochId, address rewardModule, uint256 amount)` | ALL_HOLDERS settlement |
+
+**PrizePool ticket derivation (`src/prize.ts`) — the reference implementation.**
+`hook.ts` calls `recordPrizeTicket` for every **attributed, non-module-flow buy**
+of a token whose `Token.prizePool` is set: one `PrizeTicket` per buy, append-only,
+never merged, `weight = bnbIn` RAW (the lottery `maxWeightBps` cap is applied at
+root-build time by `scripts/lib/merkle.js`, not here). Module-flow buys (e.g. a
+BurnModule buyback) are tax recursion, not participation — excluded, matching
+`scripts/operator/lib/tickets.js`. The `Module.prizeEpoch*` fields mirror
+`PrizePool._advance()` exactly (a queued length applies at the first boundary; a
+multi-epoch jump uses the old length throughout); PrizePool events carrying an
+`epochId` are authoritative sync points for the money buckets. `PrizeEpoch`
+stores BOTH the operator's posted `totalWeight/ticketCount` and the derived
+ones — **a mismatch during the 6h challenge window is how a third party detects
+a fraudulent root** and the reason this template ships with the module. Prize
+config (`payoutMode`, `epochLength`, `winnerCount`, `holdRequirementBps`) has no
+events — call-hydrated per §3.
 
 **MilestoneRewardModule (type 5):**
 | Event | Signature | Use |
@@ -644,6 +672,8 @@ templates:
   - RewardModule        # TaxReceived, DividendsDistributed, RewardClaimed, ShareUpdated
   - BurnModule          # TaxReceived, BurnExecuted, IntervalUpdated
   - LiquidityModule     # TaxReceived, LiquidityAdded, IntervalUpdated
+  - PrizePool           # TaxReceived, EpochLength*, RootPosted/Invalidated,
+                        #   RandomnessFulfilled, Prize/LotteryClaimed, PotRolledOver, DonatedToRewards
   - MilestoneRewardModule  # TaxReceived, RewardsReleased
   - FlatCurve           # contribute/refund/launch/claim lifecycle
 ```

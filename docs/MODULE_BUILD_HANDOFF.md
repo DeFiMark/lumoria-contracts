@@ -20,8 +20,8 @@ has the repo discipline.
 |---|---|---|---|---|
 | **B1** ✅ | `MilestoneRewardModule` | module 5 | shipped | nothing |
 | **B2** ✅ | `IRandomnessProvider` + `TrustedOperatorRandomness` + `MockRandomness` | infra | shipped | B3's lottery mode |
-| **B3** | `PrizePool` | module 4 | ~2 weeks | nothing |
-| **B4** | Subgraph templates + operator scripts for both | — | ~1 week | — |
+| **B3** ✅ | `PrizePool` | module 4 | shipped | nothing |
+| **B4** ✅ | Subgraph templates + operator scripts for both | — | shipped | — |
 
 **Build in that order.** B1 is small and self-contained: it will calibrate you on
 the invariants before you touch merkle proofs and epoch math. Do not start B3
@@ -82,7 +82,14 @@ Order matters and is load-bearing: **the operator commits the seed hash before t
 epoch's participants are known, and reveals after the epoch closes.** Get this
 backwards and the operator can grind the winner.
 
-### B3 — PrizePool (spec: §2)
+### B3 — PrizePool (spec: §2) ✅ SHIPPED
+
+`contracts/modules/PrizePool.sol` + vendored `lib/MerkleProof.sol` + 28 tests,
+plus a closed-loop operator test (`test/operator/Settlement.test.js`) that
+derives tickets from real hook logs, posts the derived root, and claims against
+it on-chain. Deviations from the spec below are deliberate and documented in
+TOKENOMICS_V2 §2.12 (rollover targets the LIVE epoch; ALL_HOLDERS settles
+without a root; module-flow buys earn no tickets).
 
 Buyers earn tickets during an epoch; the pot pays out pro-rata, by weighted
 lottery (≤10 winners), or to all holders.
@@ -96,7 +103,15 @@ Read §1.3 of `TOKENOMICS_V2.md` before you argue for an on-chain trade callback
 That option was evaluated and rejected: it would require changing `LumoriaHook`,
 `ITaxHandler` and `IModule`, all of which are frozen (§2 below).
 
-### B4 — Subgraph + operators
+### B4 — Subgraph + operators ✅ SHIPPED
+
+Templates for both modules; the reference ticket derivation lives in
+`subgraph/src/prize.ts` (PrizeEpoch carries both the operator's posted totals
+and the independently derived ones — a mismatch is how you spot a bad root).
+Operator tooling: `scripts/operator/settle-prizepool.js` (derive → root →
+postRoot, `DRY_RUN=1` for third-party verification) and
+`scripts/operator/randomness.js` (commit/reveal), both sharing
+`scripts/lib/merkle.js` with the tests.
 
 New dynamic-data-source template per module, following the existing per-module
 pattern in `subgraph/subgraph.yaml`. `helpers.ts` gains `MODULE_PRIZE = 4` and

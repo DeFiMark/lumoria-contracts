@@ -1,11 +1,11 @@
 # Lumoria Tokenomics V2 — PrizePool, Milestones, Reward-by-Default
 
-**Status:** Phase A (§7, §4.1, §4.2, §6.2, §6.3) is **implemented and green**.
-The **MilestoneRewardModule** (§2B) is **implemented and green** (with one addition
-to the original spec: the 18-month public-release valve, §2B.2b). The **randomness
-provider** (§3) is **implemented and green** (`IRandomnessProvider` +
-`TrustedOperatorRandomness` + `MockRandomness`; keys are consumer-scoped — §3.2b).
-The **PrizePool** (§2) remains **SPEC** — review before building.
+**Status:** Everything in this document is **implemented and green**.
+Phase A (§7, §4.1, §4.2, §6.2, §6.3) shipped first; Phase B followed:
+the **MilestoneRewardModule** (§2B, plus the 18-month public-release valve
+§2B.2b), the **randomness provider** (§3, consumer-scoped keys §3.2b), and the
+**PrizePool** (§2, implementation notes §2.12). Subgraph templates and operator
+tooling shipped alongside (§9, `scripts/operator/`).
 
 > Building these? Start with **[`MODULE_BUILD_HANDOFF.md`](./MODULE_BUILD_HANDOFF.md)**,
 > which is the work order, the invariants you must not break, and the open
@@ -137,6 +137,11 @@ effective, unlike fraud proofs over private data. See §5.
 ---
 
 ## 2. PRIZEPOOL MODULE (Type 4)
+
+**Status:** ✅ Implemented (`contracts/modules/PrizePool.sol`), tested
+(`test/modules/PrizePool.test.js` + `test/operator/Settlement.test.js`),
+subgraph template + operator scripts shipped. Implementation notes and the
+deliberate deviations from this spec: §2.12.
 
 ### 2.1 Concept
 
@@ -357,6 +362,41 @@ event LotteryClaimed(uint256 indexed epochId, uint256 indexed slot, address inde
 event PotRolledOver(uint256 indexed fromEpoch, uint256 indexed toEpoch, uint256 amount, string reason);
 event DonatedToRewards(uint256 indexed epochId, address rewardModule, uint256 amount);
 ```
+
+(The implementation adds `RootInvalidated(epochId)` and
+`SettleBountyPaid(epochId, to, amount)`.)
+
+### 2.12 Implementation notes (shipped) — where the code deviates, and why
+
+- **Rollover target is the LIVE epoch, not literally `epochId + 1`.** Rolling
+  into an already-settled epoch would mutate a pot snapshot that posted
+  entitlements have priced. In the prompt-settlement case the live epoch IS
+  `epochId + 1`, so this matches the spec's intent while staying safe under
+  late settlement. Settled epochs' `pot` snapshots are immutable.
+- **ALL_HOLDERS has no root.** There is no per-buyer entitlement to prove or
+  challenge, so settlement is a permissionless, bounty-paid
+  `settleAllHolders(epochId)` (rolls over on missing RewardModule or thin pot)
+  rather than a degenerate `postRoot`. `minParticipants` does not apply in this
+  mode — there is no ticket set to count.
+- **Constants:** `CHALLENGE_WINDOW = 6 hours` (§12 #5 recommendation, baked in),
+  `RANDOMNESS_DEADLINE = 3 days` from `postRoot`, `CLAIM_WINDOW = 30 days` from
+  claims-open. `drawRandomness` additionally waits out the challenge window so
+  an `invalidateRoot` can never race a draw.
+- **Ordering enforcement:** `drawRandomness` requires the root; the provider is
+  resolved from `Database.randomnessProvider` at draw time and pinned per epoch
+  so a provider swap mid-flight cannot hijack a pending fulfillment.
+- **Ticket derivation excludes module-flow buys** (a module clone as the
+  attributed buyer — e.g. a BurnModule buyback). Tax recursion is not
+  participation, and a module could never claim; its weight would only strand
+  pot share until the sweep. Deterministic: the module set is public on-chain
+  data. Reference implementations: `subgraph/src/prize.ts` and
+  `scripts/operator/lib/tickets.js`.
+- **Thin/empty epochs roll over inside `postRoot`** (`totalWeight == 0`,
+  `pot < minPot`, `ticketCount < minParticipants`) without paying a bounty —
+  the pot moves whole. Bounties are paid only on real settlements
+  (`postRoot`, `drawRandomness`, `settleAllHolders`).
+- **`sweepUnclaimed`** closes the loop on §2.8's last condition: after the
+  claim window, anyone can roll the unclaimed remainder into the live epoch.
 
 ---
 
@@ -1204,12 +1244,15 @@ Still outstanding before mainnet, from `LAUNCH.md`: the BSC-fork rehearsal
   configuration. Accrue, and one creator-gated call that donates to the
   RewardModule (plus the valve, which is the same call opened to anyone after
   540 days of inactivity).
-- **B2 · PrizePool (type 4)** — ~2 weeks. Epoch bucketing, merkle settlement,
-  three payout modes, pull claims, rollover.
+- ✅ **B2 · PrizePool (type 4)** — shipped. Epoch bucketing, merkle settlement,
+  three payout modes, pull claims, rollover. Implementation notes: §2.12.
 - ✅ **B3 · Randomness** — shipped. `IRandomnessProvider` +
   `TrustedOperatorRandomness` (commit–reveal, consumer-scoped keys §3.2b) +
   `MockRandomness`. Was only ever blocking the PrizePool's `LOTTERY` mode.
-- **B4 · Subgraph + operator scripts** for both.
+- ✅ **B4 · Subgraph + operator scripts** — shipped. Templates for both modules,
+  the reference ticket derivation (`subgraph/src/prize.ts`), and
+  `scripts/operator/{settle-prizepool,randomness}.js` sharing
+  `scripts/lib/merkle.js` with the tests.
 
 Phase B changes nothing frozen. It can ship during or after the closed beta, and
 **tokens launched in the beta can adopt both modules retroactively** via
@@ -1228,11 +1271,11 @@ bonded challenge game on `postRoot` · multisig on `Database.owner()`.
 
 | # | Decision | Recommendation |
 |---|---|---|
-| 1 | `holdRequirementBps` default | `10000` (must still hold what you bought) |
-| 2 | Per-address weight cap in `LOTTERY` | Offer it; default uncapped; document whale dominance |
+| 1 | `holdRequirementBps` default | ✅ Implemented as recommended: `10000` is the wizard/fixture default; `0` disables. Per-token creator choice at init. |
+| 2 | Per-address weight cap in `LOTTERY` | ✅ Implemented as recommended: offered (`maxWeightBps`, applied at root-build time in `scripts/lib/merkle.js`), default uncapped. Whale dominance documented in §2.5. |
 | 3 | Cap `CreatorFeeModule` aggregate allocation | Yes — ≤5000 bps/side. This is the real rug lever (§8) |
 | 4 | Payout denomination | BNB. Buying tokens to distribute reintroduces a swap in the settle path |
-| 5 | `challengeWindow` length | 6h; must exceed the time to independently recompute a root |
+| 5 | `challengeWindow` length | ✅ Implemented: `CHALLENGE_WINDOW = 6 hours`, a constant (§2.12) |
 | 6 | Multisig before PrizePool ships? | Recommended — `rootPoster` + `invalidateRoot` widen hot-key blast radius (§5) |
 | 7 | Delete `proposeModuleRemove`? | No — keep. See §8 |
 | 7b | **Fee ratchet — make fees monotonically decreasing?** | **No. Settled: keep the ability to raise, behind the existing 24h timelock.** See §13.3. The guarantee that motivated the ratchet — *fees can never get worse without public notice* — **already holds today**. The ratchet would remove a legitimate capability and buy nothing. Two real hardenings instead: fix §7.6 (an instant decrease must disarm a pending increase — this is an actual bait-and-switch today) and consider §7.7 (cap the per-change increase). Build the fee-timelock UI; it is the right surface. |
