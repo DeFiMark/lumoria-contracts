@@ -81,6 +81,10 @@ async function deployBase() {
     const liqMC = await LiquidityModule.deploy();
     await database.setModuleMasterCopy(2, await liqMC.getAddress());
 
+    const MilestoneRewardModule = await ethers.getContractFactory("MilestoneRewardModule");
+    const milestoneMC = await MilestoneRewardModule.deploy();
+    await database.setModuleMasterCopy(5, await milestoneMC.getAddress());
+
     // ── Uniswap V4 core (local deployment for tests) ─────────────────
     const PoolManager = await ethers.getContractFactory("PoolManager");
     const poolManager = await PoolManager.deploy(owner.address);
@@ -150,6 +154,7 @@ async function deployBase() {
             reward: rewardMC,
             burn: burnMC,
             liquidity: liqMC,
+            milestone: milestoneMC,
             flatCurve: flatCurveMC,
         },
     };
@@ -208,6 +213,8 @@ const MODULE_TYPE = Object.freeze({
     BURN: 1,
     LIQUIDITY: 2,
     CREATOR: 3,
+    PRIZE: 4,
+    MILESTONE: 5,
 });
 
 // Change type IDs (mirror TaxHandler constants)
@@ -431,6 +438,11 @@ function buildLiquidityInitData({ token, database, liquidityInterval }) {
     );
 }
 
+/** MilestoneRewardModule: abi.encode(token) */
+function buildMilestoneInitData({ token }) {
+    return coder.encode(["address"], [token]);
+}
+
 /** Far-future deadline for module execute* calls. */
 async function farDeadline() {
     return (await ethers.provider.getBlock("latest")).timestamp + 3600;
@@ -453,6 +465,7 @@ module.exports = {
     buildRewardInitData,
     buildBurnInitData,
     buildLiquidityInitData,
+    buildMilestoneInitData,
     farDeadline,
     MODULE_TYPE,
     CHANGE_TYPE,

@@ -139,4 +139,11 @@ interface ITaxHandler {
     function shares(address holder) external view returns (uint256);
     function totalShares() external view returns (uint256);
     function getModuleCount() external view returns (uint256);
+
+    /// @notice The module at `index`. Reverts on a bad index. Lets modules
+    ///         resolve sibling modules at action time — e.g. the
+    ///         MilestoneRewardModule walking the list for the RewardModule.
+    ///         Declared here against the getter that has always existed on the
+    ///         implementation; adding it changes no deployed bytecode.
+    function getModule(uint256 index) external view returns (ModuleConfig memory);
 }
