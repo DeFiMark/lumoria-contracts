@@ -18,6 +18,25 @@ contract Database is Ownable, IDatabase {
     address public override feeReceiver;
     address public override rebateContract;
 
+    /// @dev Platform-wide randomness source, resolved by modules at settlement
+    ///      time (never in the swap path). One provider serves every token, so
+    ///      no per-token VRF subscription is required. Starts as a trusted
+    ///      commit-reveal operator and can be swapped for a Chainlink VRF
+    ///      consumer without redeploying a single module. See docs/TOKENOMICS_V2.md §3.
+    address public override randomnessProvider;
+
+    // ─── Operators ──────────────────────────────────────────────────
+
+    /// @dev Lumoria's own backend services, trusted to supply a slippage floor
+    ///      for module-initiated swaps. Platform-wide, never per-token: a token
+    ///      creator cannot appoint an operator for their own module.
+    ///
+    ///      While `operatorCount == 0`, modules treat every caller as authorized
+    ///      — the system is permissionless by default and only becomes
+    ///      operator-gated once the first backend key is registered here.
+    mapping(address => bool) public override isOperator;
+    uint256 public override operatorCount;
+
     // ─── Master Copies ──────────────────────────────────────────────
 
     address public override tokenMasterCopy;
@@ -145,6 +164,30 @@ contract Database is Ownable, IDatabase {
     function setRebateContract(address _rebateContract) external onlyOwner {
         emit RebateContractUpdated(rebateContract, _rebateContract);
         rebateContract = _rebateContract;
+    }
+
+    function setRandomnessProvider(address _randomnessProvider) external onlyOwner {
+        emit RandomnessProviderUpdated(randomnessProvider, _randomnessProvider);
+        randomnessProvider = _randomnessProvider;
+    }
+
+    /// @notice Grant or revoke the platform operator role.
+    /// @dev Registering the FIRST operator flips every module from
+    ///      "permissionless immediately" to "operator-first, public after the
+    ///      fallback delay". Revoking the last one flips it back. That is a
+    ///      single owner transaction with system-wide effect — intentional, but
+    ///      worth knowing.
+    function setOperator(address operator, bool allowed) external onlyOwner {
+        require(operator != address(0), "Zero operator");
+        if (isOperator[operator] == allowed) return; // no-op, keeps the count honest
+
+        isOperator[operator] = allowed;
+        if (allowed) {
+            operatorCount += 1;
+        } else {
+            operatorCount -= 1;
+        }
+        emit OperatorUpdated(operator, allowed);
     }
 
     // ─── Admin: Master Copies ───────────────────────────────────────

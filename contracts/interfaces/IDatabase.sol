@@ -17,6 +17,8 @@ interface IDatabase {
     event VestingVaultUpdated(address indexed oldVault, address indexed newVault);
     event FeeReceiverUpdated(address indexed oldFeeReceiver, address indexed newFeeReceiver);
     event RebateContractUpdated(address indexed oldRebate, address indexed newRebate);
+    event RandomnessProviderUpdated(address indexed oldProvider, address indexed newProvider);
+    event OperatorUpdated(address indexed operator, bool allowed);
 
     // System Config
     function generator() external view returns (address);
@@ -28,6 +30,27 @@ interface IDatabase {
     function wbnb() external view returns (address);
     function feeReceiver() external view returns (address);
     function rebateContract() external view returns (address);
+
+    /// @notice Platform-wide randomness source. One provider serves every module
+    ///         on every token, so a per-token VRF subscription is never needed.
+    ///         Swappable by the owner (trusted-operator today, VRF later) without
+    ///         touching any deployed module.
+    function randomnessProvider() external view returns (address);
+
+    // ─── Operators (platform-wide, owner-managed) ───────────────────
+    //
+    // Operators are Lumoria's own backend services. They are trusted only to
+    // supply a sane slippage floor for module-initiated swaps, which spend the
+    // MODULE's BNB rather than the caller's — so a caller-chosen `minOut` cannot
+    // be trusted from an arbitrary address.
+    //
+    // Deliberately NOT per-token: creators do not configure operators.
+    //
+    // While `operatorCount == 0` every module action is permissionless, so the
+    // system is permissionless by default until the backend is switched on.
+
+    function isOperator(address account) external view returns (bool);
+    function operatorCount() external view returns (uint256);
 
     // Master Copies
     function tokenMasterCopy() external view returns (address);

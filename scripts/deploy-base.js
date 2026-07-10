@@ -180,6 +180,29 @@ async function main() {
         rebate.setAuthorizedCreditor(hookAddr, true)
     );
 
+    // ── 13. Platform operators (optional) ─────────────────────────
+    //
+    // While `Database.operatorCount() == 0`, every module action is
+    // permissionless — burns, auto-LP and reward conversion can be triggered by
+    // anyone once their interval elapses. Registering the FIRST operator flips
+    // the whole system to "operator-first, public after a 1h fallback delay".
+    //
+    // Set LUMORIA_OPERATORS to a comma-separated list of backend addresses to
+    // enable that. Leave it unset to ship permissionless.
+    const operatorList = (process.env.LUMORIA_OPERATORS || "")
+        .split(",")
+        .map((a) => a.trim())
+        .filter(Boolean);
+
+    if (operatorList.length > 0) {
+        console.log("\nRegistering platform operators...");
+        for (const op of operatorList) {
+            await tx(`database.setOperator(${op}, true)`, database.setOperator(op, true));
+        }
+    } else {
+        console.log("\nNo LUMORIA_OPERATORS set — module execution stays permissionless.");
+    }
+
     // ── Write deployments artifact ────────────────────────────────
     const deployments = {
         network: networkName,
