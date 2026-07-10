@@ -7,6 +7,7 @@ import {
 import { TaxHandler } from "../generated/Database/TaxHandler";
 import { LumoriaToken as LumoriaTokenContract } from "../generated/Database/LumoriaToken";
 import { RewardModule } from "../generated/Database/RewardModule";
+import { PrizePool } from "../generated/Database/PrizePool";
 import {
   LumoriaToken as LumoriaTokenTemplate,
   TaxHandler as TaxHandlerTemplate,
@@ -15,6 +16,7 @@ import {
   BurnModule as BurnModuleTemplate,
   LiquidityModule as LiquidityModuleTemplate,
   MilestoneRewardModule as MilestoneRewardModuleTemplate,
+  PrizePool as PrizePoolTemplate,
 } from "../generated/templates";
 import {
   Token,
@@ -33,6 +35,7 @@ import {
   MODULE_LIQUIDITY,
   MODULE_CREATOR,
   MODULE_MILESTONE,
+  MODULE_PRIZE,
   getOrCreateSystemAddresses,
   getOrCreatePlatformConfig,
   getOrCreatePlatformDayData,
@@ -184,9 +187,35 @@ function hydrateModuleSpecifics(module: Module, mAddr: Address, mType: i32): voi
     // The module's __init__ ran in this same tx, so its 18-month clock
     // started now — no contract call needed.
     module.lastReleaseTime = module.addedAt;
+  } else if (mType == MODULE_PRIZE) {
+    hydratePrizeSpecifics(module, mAddr);
   }
   // interval / lastExecuted left null — the frontend reads them live, and
   // IntervalUpdated / Burn|LiquidityExecuted events fill them as they fire.
+}
+
+/** PrizePool config has no events — call-hydrate it (SUBGRAPH.md §3). The
+ *  epoch mirror starts at (0, addedAt): __init__ ran in this same tx. Also
+ *  points Token.prizePool at the module for hook.ts ticket derivation. */
+export function hydratePrizeSpecifics(module: Module, mAddr: Address): void {
+  let pp = PrizePool.bind(mAddr);
+  let mode = pp.try_payoutMode();
+  module.prizePayoutMode = mode.reverted ? 0 : mode.value;
+  let wc = pp.try_winnerCount();
+  module.prizeWinnerCount = wc.reverted ? 0 : wc.value;
+  let hold = pp.try_holdRequirementBps();
+  module.prizeHoldRequirementBps = hold.reverted ? ZERO_BI : hold.value;
+  let len = pp.try_epochLength();
+  module.prizeEpochLength = len.reverted ? ZERO_BI : len.value;
+  module.prizePendingEpochLength = ZERO_BI;
+  module.prizeEpochId = ZERO_BI;
+  module.prizeEpochStart = module.addedAt;
+
+  let token = Token.load(module.token);
+  if (token != null) {
+    token.prizePool = Address.fromString(module.id);
+    token.save();
+  }
 }
 
 function spawnModuleTemplate(mType: i32, mAddr: Address, ctx: DataSourceContext): void {
@@ -200,6 +229,8 @@ function spawnModuleTemplate(mType: i32, mAddr: Address, ctx: DataSourceContext)
     LiquidityModuleTemplate.createWithContext(mAddr, ctx);
   } else if (mType == MODULE_MILESTONE) {
     MilestoneRewardModuleTemplate.createWithContext(mAddr, ctx);
+  } else if (mType == MODULE_PRIZE) {
+    PrizePoolTemplate.createWithContext(mAddr, ctx);
   }
 }
 

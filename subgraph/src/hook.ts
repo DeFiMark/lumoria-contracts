@@ -14,6 +14,7 @@ import {
   poolPriceBnbPerToken,
   updateCandles,
 } from "./helpers";
+import { recordPrizeTicket } from "./prize";
 
 function isModule(addr: Address): boolean {
   if (addr.equals(ADDRESS_ZERO)) return false;
@@ -68,6 +69,13 @@ export function handleTokenPurchased(event: TokenPurchased): void {
   // otherwise render a chart of its own fee stack rather than of its market.
   if (!moduleFlow) {
     updateCandles(tokenId, poolPrice, bnbIn, event.block.timestamp);
+  }
+
+  // PrizePool reference ticket derivation (TOKENOMICS_V2 §2.5): attributed,
+  // non-module-flow buys only. Third-party router buys carry user == 0x0 and
+  // earn no ticket — the deliberate incentive to route through Lumoria.
+  if (!moduleFlow && !buyer.equals(ADDRESS_ZERO)) {
+    recordPrizeTicket(token, buyer, bnbIn, tokensOut, event);
   }
 }
 

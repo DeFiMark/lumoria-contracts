@@ -30,6 +30,8 @@ dataSources:
           file: ./abis/BurnModule.json
         - name: LiquidityModule
           file: ./abis/LiquidityModule.json
+        - name: PrizePool
+          file: ./abis/PrizePool.json
       eventHandlers:
         - event: TokenRegistered(indexed address,indexed address,address)
           handler: handleTokenRegistered
@@ -339,6 +341,43 @@ templates:
           handler: handleLiquidityAdded
         - event: IntervalUpdated(uint256,uint256)
           handler: handleLiquidityIntervalUpdated
+
+  # ─── PrizePool (type 4) ────────────────────────────────────────────
+  - kind: ethereum
+    name: PrizePool
+    network: bsc
+    source:
+      abi: PrizePool
+    mapping:
+      kind: ethereum/events
+      apiVersion: 0.0.9
+      language: wasm/assemblyscript
+      file: ./src/prizePool.ts
+      entities: [Module, Token, PrizeEpoch, PrizeTicket, PrizeClaim]
+      abis:
+        - name: PrizePool
+          file: ./abis/PrizePool.json
+      eventHandlers:
+        - event: TaxReceived(indexed uint256,uint256)
+          handler: handlePrizeTaxReceived
+        - event: EpochLengthQueued(uint256)
+          handler: handleEpochLengthQueued
+        - event: EpochLengthApplied(indexed uint256,uint256)
+          handler: handleEpochLengthApplied
+        - event: RootPosted(indexed uint256,bytes32,uint256,uint256)
+          handler: handleRootPosted
+        - event: RootInvalidated(indexed uint256)
+          handler: handleRootInvalidated
+        - event: RandomnessFulfilled(indexed uint256,uint256)
+          handler: handleRandomnessFulfilled
+        - event: PrizeClaimed(indexed uint256,indexed address,uint256)
+          handler: handlePrizeClaimed
+        - event: LotteryClaimed(indexed uint256,indexed uint256,indexed address,uint256)
+          handler: handleLotteryClaimed
+        - event: PotRolledOver(indexed uint256,indexed uint256,uint256,string)
+          handler: handlePotRolledOver
+        - event: DonatedToRewards(indexed uint256,address,uint256)
+          handler: handleDonatedToRewards
 
   # ─── MilestoneRewardModule (type 5) ────────────────────────────────
   - kind: ethereum

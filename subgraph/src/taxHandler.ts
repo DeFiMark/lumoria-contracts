@@ -1,4 +1,4 @@
-import { Address, BigInt, DataSourceContext, dataSource, ethereum } from "@graphprotocol/graph-ts";
+import { Address, BigInt, Bytes, DataSourceContext, dataSource, ethereum } from "@graphprotocol/graph-ts";
 import {
   FeesUpdated,
   FeeChangeProposed,
@@ -18,7 +18,9 @@ import {
   BurnModule as BurnModuleTemplate,
   LiquidityModule as LiquidityModuleTemplate,
   MilestoneRewardModule as MilestoneRewardModuleTemplate,
+  PrizePool as PrizePoolTemplate,
 } from "../generated/templates";
+import { hydratePrizeSpecifics } from "./database";
 import {
   Token,
   Module,
@@ -35,6 +37,7 @@ import {
   MODULE_LIQUIDITY,
   MODULE_CREATOR,
   MODULE_MILESTONE,
+  MODULE_PRIZE,
   eventId,
   getOrCreateModule,
 } from "./helpers";
@@ -154,6 +157,8 @@ export function handleModuleAdded(event: ModuleAdded): void {
     m.totalReleased = ZERO_BI;
     // __init__ ran in this same tx — the 18-month clock starts now.
     m.lastReleaseTime = event.block.timestamp;
+  } else if (mType == MODULE_PRIZE) {
+    hydratePrizeSpecifics(m, mAddr);
   }
   m.save();
 
@@ -173,6 +178,7 @@ export function handleModuleAdded(event: ModuleAdded): void {
   else if (mType == MODULE_BURN) BurnModuleTemplate.createWithContext(mAddr, ctx);
   else if (mType == MODULE_LIQUIDITY) LiquidityModuleTemplate.createWithContext(mAddr, ctx);
   else if (mType == MODULE_MILESTONE) MilestoneRewardModuleTemplate.createWithContext(mAddr, ctx);
+  else if (mType == MODULE_PRIZE) PrizePoolTemplate.createWithContext(mAddr, ctx);
 
   moduleEvent(event, tokenId, "added", mAddr, mType, event.params.buyAlloc, event.params.sellAlloc);
 }
@@ -182,6 +188,14 @@ export function handleModuleRemoved(event: ModuleRemoved): void {
   if (m != null) {
     m.active = false;
     m.save();
+  }
+  // Removing the active PrizePool stops ticket derivation for the token.
+  let token = Token.load(ctxTokenId());
+  if (token != null && token.prizePool !== null) {
+    if ((token.prizePool as Bytes).equals(event.params.moduleAddress)) {
+      token.prizePool = null;
+      token.save();
+    }
   }
   moduleEvent(event, ctxTokenId(), "removed", event.params.moduleAddress, event.params.moduleType, null, null);
 }
