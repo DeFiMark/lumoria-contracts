@@ -48,10 +48,32 @@ export function nz(value: BigInt | null): BigInt {
   return value === null ? ZERO_BI : value as BigInt;
 }
 
-/** price = bnb / tokens (both 18-dec) as a human BigDecimal, or 0 if tokens == 0. */
+/** Execution price: what the trader actually paid/received, fee-inclusive. */
 export function priceFrom(bnb: BigInt, tokens: BigInt): BigDecimal {
   if (tokens.equals(ZERO_BI)) return ZERO_BD;
   return bnb.toBigDecimal().div(tokens.toBigDecimal());
+}
+
+/** 2^192 — the denominator when squaring a Q64.96 sqrt price. */
+export const Q192 = BigInt.fromI32(2).pow(192);
+
+/**
+ * Exact pool mark price in BNB per token, from the hook's post-swap sqrtPriceX96
+ * (docs/TOKENOMICS_V2.md §13.1).
+ *
+ * Lumoria pools are always currency0 = native BNB, currency1 = the token, and both
+ * are 18 decimals — so no decimal scaling is needed.
+ *
+ *   sqrtPriceX96 = sqrt(token per BNB) * 2^96
+ *   token per BNB = sqrtPriceX96^2 / 2^192
+ *   BNB per token = 2^192 / sqrtPriceX96^2
+ *
+ * Prefer this over `priceFrom` for OHLC: it is the true pool mark, undistorted by
+ * the platform fee and the token's tax.
+ */
+export function poolPriceBnbPerToken(sqrtPriceX96: BigInt): BigDecimal {
+  if (sqrtPriceX96.equals(ZERO_BI)) return ZERO_BD;
+  return Q192.toBigDecimal().div(sqrtPriceX96.times(sqrtPriceX96).toBigDecimal());
 }
 
 export function getOrCreatePlatformConfig(): PlatformConfig {
@@ -128,6 +150,7 @@ export function getOrCreateModule(
     m.active = true;
     m.addedAt = timestamp;
     m.totalReceivedBnb = ZERO_BI;
+    m.totalWithdrawnBnb = ZERO_BI;
   }
   return m as Module;
 }

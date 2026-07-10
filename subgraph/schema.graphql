@@ -103,7 +103,19 @@ type Trade @entity(immutable: true) {
   tokensOut: BigInt
   platformFee: BigInt!
   taxTaken: BigInt!
+
+  # Execution price: what this trader actually paid/received, fee-inclusive.
+  # Useful for a fills view; NOT the mark price.
   priceBnbPerToken: BigDecimal!
+
+  # Pool mark price immediately AFTER this swap, straight from the hook
+  # (docs/TOKENOMICS_V2.md §13.1). This is the OHLC source — it is exact and
+  # undistorted by the fee stack. currency0 = BNB, currency1 = token, both 18dp,
+  # so poolPriceBnbPerToken = 2^192 / sqrtPriceX96^2.
+  sqrtPriceX96: BigInt!
+  tick: Int!
+  poolPriceBnbPerToken: BigDecimal!
+
   rebateCredited: BigInt
   timestamp: BigInt!
   blockNumber: BigInt!
@@ -127,9 +139,11 @@ type Module @entity {
   totalBnbSpent: BigInt # Burn
   totalLpLocked: BigInt # Liquidity (V4 units)
   recipient: Bytes # Creator (current; rotates)
+  totalWithdrawnBnb: BigInt! # Creator: totalReceivedBnb - this = currently claimable
   interval: BigInt # Burn/Liquidity (call-hydrated; then IntervalUpdated)
   lastExecuted: BigInt # Burn/Liquidity
-  forwards: [CreatorFeeForward!]! @derivedFrom(field: "module")
+  accruals: [CreatorFeeAccrual!]! @derivedFrom(field: "module")
+  withdrawals: [CreatorFeeWithdrawal!]! @derivedFrom(field: "module")
 }
 
 type PendingChange @entity {
@@ -196,7 +210,20 @@ type LiquidityInjection @entity(immutable: true) {
   timestamp: BigInt!
 }
 
-type CreatorFeeForward @entity(immutable: true) {
+# The CreatorFeeModule accrues rather than pushing (docs/TOKENOMICS_V2.md §7.2):
+# `TaxAccrued` credits a claimable balance during the swap; `TaxWithdrawn` fires
+# later when the recipient pulls it. They are separate events on purpose — a fee
+# stream's earnings and its withdrawals no longer coincide.
+type CreatorFeeAccrual @entity(immutable: true) {
+  id: ID!
+  module: Module!
+  recipient: Bytes!
+  amount: BigInt!
+  owedAfter: BigInt!
+  timestamp: BigInt!
+}
+
+type CreatorFeeWithdrawal @entity(immutable: true) {
   id: ID!
   module: Module!
   recipient: Bytes!

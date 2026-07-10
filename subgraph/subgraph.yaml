@@ -85,9 +85,9 @@ dataSources:
         - name: LumoriaHook
           file: ./abis/LumoriaHook.json
       eventHandlers:
-        - event: TokenPurchased(indexed address,indexed address,uint256,uint256,uint256,uint256)
+        - event: TokenPurchased(indexed address,indexed address,uint256,uint256,uint256,uint256,uint160,int24)
           handler: handleTokenPurchased
-        - event: TokenSold(indexed address,indexed address,uint256,uint256,uint256,uint256)
+        - event: TokenSold(indexed address,indexed address,uint256,uint256,uint256,uint256,uint160,int24)
           handler: handleTokenSold
         - event: LumoriaPoolInitialized(indexed address,indexed bytes32)
           handler: handleLumoriaPoolInitialized
@@ -263,13 +263,15 @@ templates:
       apiVersion: 0.0.9
       language: wasm/assemblyscript
       file: ./src/creatorFeeModule.ts
-      entities: [Module, CreatorFeeForward]
+      entities: [Module, CreatorFeeAccrual, CreatorFeeWithdrawal]
       abis:
         - name: CreatorFeeModule
           file: ./abis/CreatorFeeModule.json
       eventHandlers:
-        - event: TaxForwarded(indexed address,uint256)
-          handler: handleTaxForwarded
+        - event: TaxAccrued(indexed address,uint256,uint256)
+          handler: handleTaxAccrued
+        - event: TaxWithdrawn(indexed address,uint256)
+          handler: handleTaxWithdrawn
         - event: RecipientUpdated(indexed address,indexed address)
           handler: handleRecipientUpdated
 

@@ -11,6 +11,7 @@ import {
   ADDRESS_ZERO,
   eventId,
   priceFrom,
+  poolPriceBnbPerToken,
   updateCandles,
 } from "./helpers";
 
@@ -28,7 +29,12 @@ export function handleTokenPurchased(event: TokenPurchased): void {
   let bnbIn = event.params.bnbIn;
   let tokensOut = event.params.tokensOut;
   let moduleFlow = isModule(buyer);
+
+  // Execution price (fee-inclusive) vs. pool mark price (exact, post-swap).
+  // The hook emits sqrtPriceX96 + tick directly — no PoolManager indexing needed.
   let price = priceFrom(bnbIn, tokensOut);
+  let sqrtPriceX96 = event.params.sqrtPriceX96;
+  let poolPrice = poolPriceBnbPerToken(sqrtPriceX96);
 
   let t = new Trade(eventId(event));
   t.token = tokenId;
@@ -41,6 +47,9 @@ export function handleTokenPurchased(event: TokenPurchased): void {
   t.platformFee = event.params.platformFee;
   t.taxTaken = event.params.taxTaken;
   t.priceBnbPerToken = price;
+  t.sqrtPriceX96 = sqrtPriceX96;
+  t.tick = event.params.tick;
+  t.poolPriceBnbPerToken = poolPrice;
   t.timestamp = event.block.timestamp;
   t.blockNumber = event.block.number;
   t.txHash = event.transaction.hash;
@@ -50,13 +59,15 @@ export function handleTokenPurchased(event: TokenPurchased): void {
   token.totalPlatformFeeBnb = token.totalPlatformFeeBnb.plus(event.params.platformFee);
   token.totalTaxBnb = token.totalTaxBnb.plus(event.params.taxTaken);
   if (!moduleFlow) {
-    token.lastPriceBnb = price;
+    token.lastPriceBnb = poolPrice;
   }
   token.save();
 
   // OHLC + organic volume: exclude module-recursion trades (§1e).
+  // Candles use the POOL price, not the execution price — a 98%-tax token would
+  // otherwise render a chart of its own fee stack rather than of its market.
   if (!moduleFlow) {
-    updateCandles(tokenId, price, bnbIn, event.block.timestamp);
+    updateCandles(tokenId, poolPrice, bnbIn, event.block.timestamp);
   }
 }
 
@@ -70,6 +81,8 @@ export function handleTokenSold(event: TokenSold): void {
   let tokensIn = event.params.tokensIn;
   let moduleFlow = isModule(seller);
   let price = priceFrom(bnbOut, tokensIn);
+  let sqrtPriceX96 = event.params.sqrtPriceX96;
+  let poolPrice = poolPriceBnbPerToken(sqrtPriceX96);
 
   let t = new Trade(eventId(event));
   t.token = tokenId;
@@ -82,6 +95,9 @@ export function handleTokenSold(event: TokenSold): void {
   t.platformFee = event.params.platformFee;
   t.taxTaken = event.params.taxTaken;
   t.priceBnbPerToken = price;
+  t.sqrtPriceX96 = sqrtPriceX96;
+  t.tick = event.params.tick;
+  t.poolPriceBnbPerToken = poolPrice;
   t.timestamp = event.block.timestamp;
   t.blockNumber = event.block.number;
   t.txHash = event.transaction.hash;
@@ -91,12 +107,12 @@ export function handleTokenSold(event: TokenSold): void {
   token.totalPlatformFeeBnb = token.totalPlatformFeeBnb.plus(event.params.platformFee);
   token.totalTaxBnb = token.totalTaxBnb.plus(event.params.taxTaken);
   if (!moduleFlow) {
-    token.lastPriceBnb = price;
+    token.lastPriceBnb = poolPrice;
   }
   token.save();
 
   if (!moduleFlow) {
-    updateCandles(tokenId, price, bnbOut, event.block.timestamp);
+    updateCandles(tokenId, poolPrice, bnbOut, event.block.timestamp);
   }
 }
 
