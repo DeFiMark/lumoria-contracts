@@ -8,6 +8,7 @@ const {
     initializeToken,
     launchTokenWithPair,
     buildLiquidityInitData,
+    farDeadline,
     MODULE_TYPE,
 } = require("../fixtures/deploy");
 
@@ -129,7 +130,7 @@ describe("LiquidityModule", function () {
                 (await taxHandler.getModule(0)).moduleAddress,
             );
             await taxHandler.receiveBuyTax({ value: ethers.parseEther("1") });
-            await expect(liqMod.executeLiquidity()).to.be.revertedWith("Interval not elapsed");
+            await expect(liqMod.executeLiquidity(1n, 0, 0, await farDeadline())).to.be.revertedWith("Interval not elapsed");
         });
 
         it("swaps half BNB for tokens and locks the pair as V4 vault liquidity", async function () {
@@ -146,7 +147,7 @@ describe("LiquidityModule", function () {
 
             const lockedBefore = await base.vault.lockedLiquidity(tokenAddr);
 
-            await expect(liqMod.connect(base.signers.keeper).executeLiquidity())
+            await expect(liqMod.connect(base.signers.keeper).executeLiquidity(1n, 0, 0, await farDeadline()))
                 .to.emit(liqMod, "LiquidityAdded");
 
             // Liquidity grew in the permanently-locked vault position

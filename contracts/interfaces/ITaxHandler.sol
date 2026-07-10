@@ -87,6 +87,11 @@ interface ITaxHandler {
     function token() external view returns (address);
     function creator() external view returns (address);
 
+    /// @notice The Database this token was launched against. Lets modules that
+    ///         don't carry a `database` reference (RewardModule) resolve
+    ///         platform-wide config such as the operator registry.
+    function database() external view returns (address);
+
     // ─── Fee changes (called by creator, subject to timelock) ───────
 
     function proposeFeeChange(uint256 newBuyFee, uint256 newSellFee) external;

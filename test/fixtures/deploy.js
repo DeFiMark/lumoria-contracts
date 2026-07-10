@@ -400,7 +400,8 @@ function buildCreatorFeeInitData(recipientAddr) {
 }
 
 /** RewardModule: abi.encode(token, rewardToken, externalRouter, externalWBNB, minDistribution).
- *  Pass rewardToken=ZERO for BNB mode (no external router needed). */
+ *  Pass rewardToken=ZERO for BNB mode (no external router needed).
+ *  Operators are platform-wide (Database.setOperator), never per-module. */
 function buildRewardInitData({
     token,
     rewardToken = ZERO,
@@ -430,6 +431,11 @@ function buildLiquidityInitData({ token, database, liquidityInterval }) {
     );
 }
 
+/** Far-future deadline for module execute* calls. */
+async function farDeadline() {
+    return (await ethers.provider.getBlock("latest")).timestamp + 3600;
+}
+
 module.exports = {
     deployBase,
     loadFixture,
@@ -447,6 +453,7 @@ module.exports = {
     buildRewardInitData,
     buildBurnInitData,
     buildLiquidityInitData,
+    farDeadline,
     MODULE_TYPE,
     CHANGE_TYPE,
     LAUNCH_MODE,

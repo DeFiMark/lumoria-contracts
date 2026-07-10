@@ -11,8 +11,22 @@ pragma solidity 0.8.28;
       3. Liquidity is permanently locked in the LiquidityVault (no removal
          path exists).
 
-    Execution is permissionless: anyone can trigger executeLiquidity()
-    once the configured interval has elapsed.
+    Execution happens OUT OF BAND, never inside a swap: `receiveTax()` only
+    accrues, and `executeLiquidity(...)` does the work in its own transaction
+    with caller-supplied slippage floors on both legs.
+
+    Execution authority comes from the PLATFORM operator registry in the Database,
+    never from the token creator — the minimums spend the MODULE's BNB, not the
+    caller's, so an arbitrary caller has no incentive to choose them well:
+
+      - operatorCount == 0        → permissionless immediately (the default)
+      - registered operator       → may execute as soon as the interval elapses
+      - anyone else               → may execute after PUBLIC_FALLBACK_DELAY
+
+    The swap leg re-enters this token's tax path (the hook taxes every swap,
+    including ours), routing a slice of the buy tax back into `receiveTax()`.
+    That terminates one level deep because `receiveTax()` only accrues — the
+    IModule invariant is what stops this becoming a loop.
 
     Leftover dust (unused tokens or BNB from imperfect ratios) stays in
     the module and is consumed in the next round.
@@ -37,6 +51,10 @@ contract LiquidityModule is IModule, ReentrancyGuard {
     uint8 internal constant MODULE_TYPE = 2;
 
     uint256 internal constant MIN_INTERVAL = 5 minutes;
+
+    /// @dev Once the interval has elapsed AND this much longer has passed, anyone
+    ///      may execute even while operators are registered. Liveness fallback.
+    uint256 internal constant PUBLIC_FALLBACK_DELAY = 1 hours;
 
     // LP tokens are sent here — permanently locked, no rug possible
     address internal constant DEAD = 0x000000000000000000000000000000000000dEaD;
@@ -96,17 +114,36 @@ contract LiquidityModule is IModule, ReentrancyGuard {
 
     // ─── Tax Receipt ────────────────────────────────────────────────
 
+    /// @dev Runs inside the V4 swap callback. Accrues only — no value out, no
+    ///      external calls, cannot revert. See IModule.
     function receiveTax() external payable override {
         require(msg.sender == taxHandler, "Only taxHandler");
         emit TaxReceived(msg.value, address(this).balance);
     }
 
-    // ─── Execute Liquidity Injection (permissionless) ───────────────
+    // ─── Execute Liquidity Injection (out of band) ──────────────────
 
-    /// @notice Anyone can trigger the auto-LP once the interval has elapsed.
-    ///         Uses the full accumulated BNB balance (half to swap, half to pair).
-    function executeLiquidity() external nonReentrant {
-        require(block.timestamp >= lastLiquidityTime + liquidityInterval, "Interval not elapsed");
+    /// @notice Auto-LP using the full accumulated BNB balance (half swapped for
+    ///         tokens, half paired against them).
+    ///
+    /// @param minTokensOut Minimum tokens the swap leg must return. MUST be > 0 —
+    ///        a zero floor lets anyone sandwich the module's own buy.
+    /// @param minTokenLP  Minimum tokens actually consumed by the add-liquidity leg.
+    /// @param minBnbLP    Minimum BNB actually consumed by the add-liquidity leg.
+    /// @param deadline    Latest timestamp this may execute (mempool protection).
+    function executeLiquidity(
+        uint256 minTokensOut,
+        uint256 minTokenLP,
+        uint256 minBnbLP,
+        uint256 deadline
+    ) external nonReentrant {
+        require(block.timestamp <= deadline, "Expired");
+        require(minTokensOut > 0, "Zero minTokensOut");
+
+        uint256 readyAt = lastLiquidityTime + liquidityInterval;
+        require(block.timestamp >= readyAt, "Interval not elapsed");
+        _requireExecutor(readyAt);
+
         uint256 bnbBal = address(this).balance;
         require(bnbBal >= 2, "Insufficient BNB"); // need at least 2 wei to split
 
@@ -125,14 +162,13 @@ contract LiquidityModule is IModule, ReentrancyGuard {
         path[1] = token;
         uint256 balBefore = IERC20(token).balanceOf(address(this));
         ILumoriaRouter(router).swapExactETHForTokensSupportingFeeOnTransferTokens{value: halfForSwap}(
-            0,
+            minTokensOut,
             path,
             address(this),
-            block.timestamp
+            deadline
         );
-        uint256 balAfter = IERC20(token).balanceOf(address(this));
-        uint256 tokensForLP = balAfter - balBefore;
-        require(tokensForLP > 0, "No tokens received");
+        uint256 tokensForLP = IERC20(token).balanceOf(address(this)) - balBefore;
+        require(tokensForLP >= minTokensOut, "Slippage");
 
         // 2. Approve router, add the remaining BNB + tokens as full-range
         //    liquidity → permanently locked in the LiquidityVault (the DEAD
@@ -141,10 +177,10 @@ contract LiquidityModule is IModule, ReentrancyGuard {
         (uint256 amountToken, uint256 amountETH, uint256 liquidity) = ILumoriaRouter(router).addLiquidityETH{value: halfForLP}(
             token,
             tokensForLP,
-            0,
-            0,
+            minTokenLP,
+            minBnbLP,
             DEAD,
-            block.timestamp
+            deadline
         );
 
         totalTokensLiquified += amountToken;
@@ -161,6 +197,15 @@ contract LiquidityModule is IModule, ReentrancyGuard {
         require(newInterval >= MIN_INTERVAL, "Interval too short");
         emit IntervalUpdated(liquidityInterval, newInterval);
         liquidityInterval = newInterval;
+    }
+
+    /// @dev Gate for swap execution, resolved against the PLATFORM operator
+    ///      registry — never a per-token setting. See the header for the policy.
+    function _requireExecutor(uint256 readyAt) internal view {
+        IDatabase db = IDatabase(database);
+        if (db.operatorCount() == 0) return;          // permissionless by default
+        if (db.isOperator(msg.sender)) return;        // Lumoria backend
+        require(block.timestamp >= readyAt + PUBLIC_FALLBACK_DELAY, "Operator window");
     }
 
     // ─── Views ──────────────────────────────────────────────────────

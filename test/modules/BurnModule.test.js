@@ -8,6 +8,7 @@ const {
     initializeToken,
     launchTokenWithPair,
     buildBurnInitData,
+    farDeadline,
     MODULE_TYPE,
 } = require("../fixtures/deploy");
 
@@ -164,7 +165,7 @@ describe("BurnModule", function () {
             );
             await taxHandler.receiveBuyTax({ value: ethers.parseEther("1") });
             // burnInterval is 5 min; lastBurnTime = deploy timestamp. Not elapsed yet.
-            await expect(burnMod.executeBurn()).to.be.revertedWith("Interval not elapsed");
+            await expect(burnMod.executeBurn(1n, await farDeadline())).to.be.revertedWith("Interval not elapsed");
         });
 
         it("swaps BNB for tokens and burns them, reducing totalSupply", async function () {
@@ -187,7 +188,7 @@ describe("BurnModule", function () {
             const supplyBefore = await token.totalSupply();
 
             // Anyone can trigger
-            await expect(burnMod.connect(base.signers.keeper).executeBurn())
+            await expect(burnMod.connect(base.signers.keeper).executeBurn(1n, await farDeadline()))
                 .to.emit(burnMod, "BurnExecuted");
 
             const supplyAfter = await token.totalSupply();

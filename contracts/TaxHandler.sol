@@ -56,7 +56,7 @@ contract TaxHandler is ITaxHandler, ReentrancyGuard {
     // ─── Core References ────────────────────────────────────────────
 
     address public override token;
-    address public database;
+    address public override database;
     address public override creator;
     bool internal _initialized;
 

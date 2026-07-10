@@ -9,9 +9,26 @@ pragma solidity 0.8.28;
     V4 pool (via the LumoriaSwapRouter) and burn them (reducing totalSupply
     via ILumoriaToken.burn).
 
-    Execution is permissionless: anyone can trigger executeBurn() once
-    the configured interval has elapsed. The interval caps the frequency
-    at which the module can be executed, which bounds MEV opportunities.
+    Execution happens OUT OF BAND, never inside a swap: `receiveTax()` only
+    accrues, and `executeBurn(minTokensOut, deadline)` performs the buyback in
+    its own transaction. The interval caps execution frequency; the caller
+    supplies a slippage floor.
+
+    Execution authority comes from the PLATFORM operator registry in the Database,
+    never from the token creator. `minTokensOut` spends the MODULE's BNB, not the
+    caller's, so an arbitrary caller has no incentive to choose it well — they can
+    pass 1 wei and sandwich their own call. Hence:
+
+      - operatorCount == 0        → permissionless immediately (the default)
+      - registered operator       → may execute as soon as the interval elapses
+      - anyone else               → may execute after PUBLIC_FALLBACK_DELAY, so an
+                                    absent backend delays a burn but never strands
+                                    the accrued BNB
+
+    The buyback swap re-enters this token's tax path (the hook taxes every swap,
+    including ours), which routes a slice of the buy tax back into this module's
+    `receiveTax()`. That terminates one level deep because `receiveTax()` only
+    accrues — it is exactly the IModule invariant that stops this becoming a loop.
 
     The module pays the standard 1% Lumoria platform fee on each buyback
     because it swaps through the Lumoria Router — intentional, generates
@@ -33,6 +50,10 @@ contract BurnModule is IModule, ReentrancyGuard {
 
     // safety floor on interval to bound MEV frequency even if creator misconfigures
     uint256 internal constant MIN_INTERVAL = 5 minutes;
+
+    /// @dev Once the interval has elapsed AND this much longer has passed, anyone
+    ///      may execute even while operators are registered. Liveness fallback.
+    uint256 internal constant PUBLIC_FALLBACK_DELAY = 1 hours;
 
     // core references
     address public taxHandler;
@@ -83,17 +104,29 @@ contract BurnModule is IModule, ReentrancyGuard {
 
     // ─── Tax Receipt ────────────────────────────────────────────────
 
+    /// @dev Runs inside the V4 swap callback. Accrues only — no value out, no
+    ///      external calls, cannot revert. See IModule.
     function receiveTax() external payable override {
         require(msg.sender == taxHandler, "Only taxHandler");
         emit TaxReceived(msg.value, address(this).balance);
     }
 
-    // ─── Execute Burn (permissionless) ──────────────────────────────
+    // ─── Execute Burn (out of band) ─────────────────────────────────
 
-    /// @notice Anyone can trigger the burn once the interval has elapsed.
-    ///         Uses the full accumulated BNB balance for the buyback.
-    function executeBurn() external nonReentrant {
-        require(block.timestamp >= lastBurnTime + burnInterval, "Interval not elapsed");
+    /// @notice Buy back and burn using the full accumulated BNB balance.
+    ///
+    /// @param minTokensOut Minimum tokens the buyback must return. MUST be > 0 —
+    ///        a zero floor lets anyone sandwich the module's own buy. Compute it
+    ///        off-chain against the pool's current price minus tolerance.
+    /// @param deadline Latest timestamp this may execute (mempool protection).
+    function executeBurn(uint256 minTokensOut, uint256 deadline) external nonReentrant {
+        require(block.timestamp <= deadline, "Expired");
+        require(minTokensOut > 0, "Zero minTokensOut");
+
+        uint256 readyAt = lastBurnTime + burnInterval;
+        require(block.timestamp >= readyAt, "Interval not elapsed");
+        _requireExecutor(readyAt);
+
         uint256 bnbBal = address(this).balance;
         require(bnbBal > 0, "No BNB to burn");
 
@@ -107,17 +140,19 @@ contract BurnModule is IModule, ReentrancyGuard {
         path[0] = wbnb;
         path[1] = token;
 
+        // The router enforces minTokensOut, but it credits `to` — and this
+        // swap's own buy tax lands back here mid-call. Measure the delta and
+        // re-check, rather than trusting either the router or the balance.
         uint256 balBefore = IERC20(token).balanceOf(address(this));
         ILumoriaRouter(router).swapExactETHForTokensSupportingFeeOnTransferTokens{value: bnbBal}(
-            0,
+            minTokensOut,
             path,
             address(this),
-            block.timestamp
+            deadline
         );
-        uint256 balAfter = IERC20(token).balanceOf(address(this));
-        uint256 tokensReceived = balAfter - balBefore;
+        uint256 tokensReceived = IERC20(token).balanceOf(address(this)) - balBefore;
 
-        require(tokensReceived > 0, "No tokens received");
+        require(tokensReceived >= minTokensOut, "Slippage");
         ILumoriaToken(token).burn(tokensReceived);
 
         totalBurned += tokensReceived;
@@ -134,6 +169,15 @@ contract BurnModule is IModule, ReentrancyGuard {
         require(newInterval >= MIN_INTERVAL, "Interval too short");
         emit IntervalUpdated(burnInterval, newInterval);
         burnInterval = newInterval;
+    }
+
+    /// @dev Gate for swap execution, resolved against the PLATFORM operator
+    ///      registry — never a per-token setting. See the header for the policy.
+    function _requireExecutor(uint256 readyAt) internal view {
+        IDatabase db = IDatabase(database);
+        if (db.operatorCount() == 0) return;          // permissionless by default
+        if (db.isOperator(msg.sender)) return;        // Lumoria backend
+        require(block.timestamp >= readyAt + PUBLIC_FALLBACK_DELAY, "Operator window");
     }
 
     // ─── Views ──────────────────────────────────────────────────────

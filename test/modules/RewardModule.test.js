@@ -9,6 +9,7 @@ const {
     launchTokenWithPair,
     buildRewardInitData,
     buildCreatorFeeInitData,
+    farDeadline,
     MODULE_TYPE,
 } = require("../fixtures/deploy");
 
@@ -192,8 +193,14 @@ describe("RewardModule (token mode)", function () {
         // Seed user1 with main-token shares
         await token.connect(owner).transfer(user1.address, ethers.parseEther("1000"));
 
-        // Send tax BNB → TaxHandler → RewardModule → swap → reward token distributed pro-rata
+        // Send tax BNB → TaxHandler → RewardModule. In token mode the swap is NOT
+        // performed inside receiveTax (it runs in the V4 swap callback — see
+        // TOKENOMICS_V2 §7.1); the BNB accrues and nothing is distributed yet.
         await taxHandler.receiveBuyTax({ value: ethers.parseEther("1") });
+        expect(await rewardMod.totalDividendsDistributed()).to.equal(0);
+
+        // A keeper (anyone) performs the swap + distribution out of band.
+        await rewardMod.convertAndDistribute(1n, await farDeadline());
 
         // User should have a positive unpaid reward balance in rewardToken units
         const unpaid = await rewardMod.getUnpaidRewards(user1.address);
@@ -220,10 +227,13 @@ describe("RewardModule (token mode)", function () {
         // NOTE: min is on BNB balance, not pendingBNB (that's BNB-mode only). So
         // we send tax below threshold and verify no distribution happens.
         await taxHandler.receiveBuyTax({ value: ethers.parseEther("0.005") });
+        await rewardMod.convertAndDistribute(1n, await farDeadline());
         expect(await rewardMod.totalDividendsDistributed()).to.equal(0);
 
-        // Top up to cross the threshold
+        // Top up to cross the threshold. Token mode defers the swap, so the
+        // keeper trigger is what actually distributes.
         await taxHandler.receiveBuyTax({ value: ethers.parseEther("0.01") });
+        await rewardMod.convertAndDistribute(1n, await farDeadline());
         expect(await rewardMod.totalDividendsDistributed()).to.be.gt(0);
     });
 });
