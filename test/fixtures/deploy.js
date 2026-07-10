@@ -81,6 +81,10 @@ async function deployBase() {
     const liqMC = await LiquidityModule.deploy();
     await database.setModuleMasterCopy(2, await liqMC.getAddress());
 
+    const PrizePool = await ethers.getContractFactory("PrizePool");
+    const prizeMC = await PrizePool.deploy();
+    await database.setModuleMasterCopy(4, await prizeMC.getAddress());
+
     const MilestoneRewardModule = await ethers.getContractFactory("MilestoneRewardModule");
     const milestoneMC = await MilestoneRewardModule.deploy();
     await database.setModuleMasterCopy(5, await milestoneMC.getAddress());
@@ -154,6 +158,7 @@ async function deployBase() {
             reward: rewardMC,
             burn: burnMC,
             liquidity: liqMC,
+            prize: prizeMC,
             milestone: milestoneMC,
             flatCurve: flatCurveMC,
         },
@@ -443,6 +448,36 @@ function buildMilestoneInitData({ token }) {
     return coder.encode(["address"], [token]);
 }
 
+/** PrizePool: the full §2.10 tuple. Defaults follow the recommended settings
+ *  (hold everything you bought; uncapped weights; no minimums; no bounty). */
+const PAYOUT_MODE = Object.freeze({ PRO_RATA: 0, LOTTERY: 1, ALL_HOLDERS: 2 });
+
+function buildPrizePoolInitData({
+    token,
+    database,
+    payoutMode = PAYOUT_MODE.PRO_RATA,
+    epochLength = 24 * 60 * 60,
+    winnerCount = 0,
+    holdRequirementBps = 10000n,
+    maxWeightBps = 0n,
+    minPot = 0n,
+    minParticipants = 0n,
+    settleBountyBps = 0n,
+    rootPoster,
+}) {
+    return coder.encode(
+        [
+            "address", "address", "uint8", "uint256", "uint8",
+            "uint256", "uint256", "uint256", "uint256", "uint256", "address",
+        ],
+        [
+            token, database, payoutMode, epochLength, winnerCount,
+            holdRequirementBps, maxWeightBps, minPot, minParticipants,
+            settleBountyBps, rootPoster ?? ZERO,
+        ],
+    );
+}
+
 /** Far-future deadline for module execute* calls. */
 async function farDeadline() {
     return (await ethers.provider.getBlock("latest")).timestamp + 3600;
@@ -466,8 +501,10 @@ module.exports = {
     buildBurnInitData,
     buildLiquidityInitData,
     buildMilestoneInitData,
+    buildPrizePoolInitData,
     farDeadline,
     MODULE_TYPE,
     CHANGE_TYPE,
     LAUNCH_MODE,
+    PAYOUT_MODE,
 };
