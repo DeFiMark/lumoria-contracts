@@ -2,8 +2,10 @@
 
 **Status:** Phase A (§7, §4.1, §4.2, §6.2, §6.3) is **implemented and green**.
 The **MilestoneRewardModule** (§2B) is **implemented and green** (with one addition
-to the original spec: the 18-month public-release valve, §2B.2b). The **PrizePool**
-(§2) and the randomness provider (§3) remain **SPEC** — review before building.
+to the original spec: the 18-month public-release valve, §2B.2b). The **randomness
+provider** (§3) is **implemented and green** (`IRandomnessProvider` +
+`TrustedOperatorRandomness` + `MockRandomness`; keys are consumer-scoped — §3.2b).
+The **PrizePool** (§2) remains **SPEC** — review before building.
 
 > Building these? Start with **[`MODULE_BUILD_HANDOFF.md`](./MODULE_BUILD_HANDOFF.md)**,
 > which is the work order, the invariants you must not break, and the open
@@ -584,10 +586,28 @@ cannot precompute it at buy time (the future blockhash is unknown). If the revea
 never arrives before `randomnessDeadline`, the epoch **rolls over** — a withheld
 reveal delays a prize, it does not freeze or steal one.
 
-Residual risk: BSC validators have some influence over `blockhash`. This is
-acceptable for a closed beta with capped exposure, must be disclosed, and
-disappears entirely when the provider is swapped for VRF. **This is the one place
-in the system where a trusted party can affect who gets paid.** Say so publicly.
+Residual risk: BSC validators have some influence over `blockhash`, and the
+revealer chooses which block to reveal in. This is acceptable for a closed beta
+with capped exposure, must be disclosed, and disappears entirely when the
+provider is swapped for VRF. **This is the one place in the system where a
+trusted party can affect who gets paid.** Say so publicly.
+
+### 3.2b Implementation notes (shipped)
+
+`contracts/TrustedOperatorRandomness.sol`, tested in
+`test/TrustedOperatorRandomness.test.js`. Two decisions made during the build:
+
+- **Keys are consumer-scoped.** The storage key is
+  `keccak256(abi.encode(consumer, requestKey))`, computed inside
+  `requestRandomness` from `msg.sender` (helper: `scopedKeyFor`). Without this, a
+  stranger could front-run `requestRandomness` with a module's key and register
+  themselves as the consumer, stranding that epoch's randomness. Operators commit
+  against the scoped key.
+- **`reveal` is permissionless; `commit` follows the platform operator registry**
+  (`operatorCount == 0` → permissionless, else `isOperator` — a trusted
+  attestation, so no public-fallback window, per §6.3). Knowing the seed preimage
+  is the credential for reveal: the operator can publish the seed and anyone can
+  finish the job.
 
 ### 3.3 Other implementations
 
@@ -1186,8 +1206,9 @@ Still outstanding before mainnet, from `LAUNCH.md`: the BSC-fork rehearsal
   540 days of inactivity).
 - **B2 · PrizePool (type 4)** — ~2 weeks. Epoch bucketing, merkle settlement,
   three payout modes, pull claims, rollover.
-- **B3 · Randomness** — `IRandomnessProvider` + `TrustedOperatorRandomness`
-  (commit–reveal) + `MockRandomness`. Blocks only the PrizePool's `LOTTERY` mode.
+- ✅ **B3 · Randomness** — shipped. `IRandomnessProvider` +
+  `TrustedOperatorRandomness` (commit–reveal, consumer-scoped keys §3.2b) +
+  `MockRandomness`. Was only ever blocking the PrizePool's `LOTTERY` mode.
 - **B4 · Subgraph + operator scripts** for both.
 
 Phase B changes nothing frozen. It can ship during or after the closed beta, and

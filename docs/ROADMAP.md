@@ -180,9 +180,10 @@ Phase-A close.
   public-release valve** (§2B.2b): after 540 days with no release, anyone can
   push the full balance to holders; any release resets the clock. 24 tests
   (`test/modules/MilestoneRewardModule.test.js`) + subgraph template.
-- ⬜ **B2 · Randomness** — `IRandomnessProvider` + `TrustedOperatorRandomness`
-  (commit–reveal + blockhash mixing) + `MockRandomness`. Registered at
-  `Database.randomnessProvider`. Blocks only the PrizePool's LOTTERY mode.
+- ✅ **B2 · Randomness** — `IRandomnessProvider` + `TrustedOperatorRandomness`
+  (commit–reveal + blockhash mixing, consumer-scoped keys — V2 §3.2b) +
+  `MockRandomness`. Registered at `Database.randomnessProvider`. 14 tests
+  (`test/TrustedOperatorRandomness.test.js`).
 - ⬜ **B3 · PrizePool (type 4)** — epoch bucketing, off-chain tickets from
   `TokenPurchased`, merkle settlement (root **before** randomness), three payout
   modes, pull claims, rollover. Spec: TOKENOMICS_V2 §2.

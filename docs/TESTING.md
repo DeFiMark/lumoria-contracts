@@ -157,6 +157,7 @@ Operators are **platform-wide**, not part of any init payload: `database.setOper
 | `VestingVault.sol` | ✅ | ✅ | generator-gated `createSchedule` + validations, linear+cliff vesting math, `release` (full/partial/double), permissionless poke, beneficiary index |
 
 | `Database.sol` → `randomnessProvider` | ✅ | — | default zero, owner-gated setter, `RandomnessProviderUpdated` (V2 §7.4) |
+| `TrustedOperatorRandomness.sol` | ✅ | ✅ | commit (operator-gated, no re-commit, zero-hash rejected), request (no-commit revert, consumer-scoped keys stop front-run squatting), reveal (no-request/bad-preimage/double-fulfill reverts, word = keccak(seed, prev blockhash), permissionless), `MockRandomness` auto + manual modes (V2 §3) |
 | `Database.sol` → operator registry | ✅ | ✅ | `setOperator` owner-gated, `operatorCount` honest across redundant grants/revokes, zero-address rejected; modules gate on it (V2 §6.2) |
 | `Generator.sol` → FlatCurve exclusion | ✅ | ✅ | the launched FlatCurve is excluded from shares **before** it receives presale tokens (V2 §7.3) |
 
@@ -164,7 +165,7 @@ Operators are **platform-wide**, not part of any init payload: `database.setOper
 
 ### Blocked — add tests once unblocked
 
-None currently. All Phase 1-5 contracts — plus the Phase-6 vesting/allocations/renounce work (incl. the rebate renounce-freeze), the Tokenomics-V2 Phase-A substrate changes, and the Phase-B MilestoneRewardModule — are under test (**241 tests green**).
+None currently. All Phase 1-5 contracts — plus the Phase-6 vesting/allocations/renounce work (incl. the rebate renounce-freeze), the Tokenomics-V2 Phase-A substrate changes, and the Phase-B MilestoneRewardModule + randomness provider — are under test (**255 tests green**).
 
 ---
 

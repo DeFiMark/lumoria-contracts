@@ -19,7 +19,7 @@ has the repo discipline.
 | # | Deliverable | Type | Effort | Blocks |
 |---|---|---|---|---|
 | **B1** ✅ | `MilestoneRewardModule` | module 5 | shipped | nothing |
-| **B2** | `IRandomnessProvider` + `TrustedOperatorRandomness` + `MockRandomness` | infra | ~3 days | B3's lottery mode |
+| **B2** ✅ | `IRandomnessProvider` + `TrustedOperatorRandomness` + `MockRandomness` | infra | shipped | B3's lottery mode |
 | **B3** | `PrizePool` | module 4 | ~2 weeks | nothing |
 | **B4** | Subgraph templates + operator scripts for both | — | ~1 week | — |
 
@@ -60,7 +60,13 @@ function getModuleType() external pure returns (uint8);                   // 5
 function getStats() external view returns (bytes memory);
 ```
 
-### B2 — Randomness (spec: §3)
+### B2 — Randomness (spec: §3) ✅ SHIPPED
+
+`contracts/interfaces/IRandomnessProvider.sol` + `contracts/TrustedOperatorRandomness.sol`
++ `contracts/test-mocks/MockRandomness.sol`, 14 tests. Keys are consumer-scoped
+(§3.2b) so a stranger cannot front-run a module's request and strand its epoch.
+`commit` follows the platform operator registry; `reveal` is permissionless
+(the seed preimage is the credential).
 
 One **platform-wide** provider behind `IRandomnessProvider`, registered at
 `Database.randomnessProvider` (the field exists already and is unread). Never a

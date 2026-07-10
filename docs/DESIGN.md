@@ -103,6 +103,11 @@ Lumoria is a **curated token launchpad** with **modular tokenomics**, whose liqu
 | `FlatCurve.sol` | Presale-style raise: users contribute BNB within min/max, refundable (minus 1% platform fee), auto-pairs on fill | **DONE** |
 | `VestingVault.sol` | Shared singleton custodying vested creator allocations — linear+cliff, **non-revocable** (no removal path), `createSchedule` gated to the Generator, permissionless `release` | **DONE** |
 
+### Platform Services
+| Contract | Purpose | Status |
+|----------|---------|--------|
+| `TrustedOperatorRandomness.sol` | Platform-wide commit–reveal randomness (consumer-scoped keys, blockhash mixing) behind `IRandomnessProvider`; registered at `Database.randomnessProvider`; swappable for Chainlink VRF with zero module changes (TOKENOMICS_V2 §3) | **DONE** |
+
 ### Libraries & Interfaces
 | Contract | Purpose | Status |
 |----------|---------|--------|
@@ -110,7 +115,7 @@ Lumoria is a **curated token launchpad** with **modular tokenomics**, whose liqu
 | `ReentrancyGuard.sol` | Reentrancy protection | **EXISTS** |
 | `TransferHelper.sol` | Safe ERC20 transfers | **EXISTS** |
 | `EnumerableSet.sol` | Set data structures (retained for future use; not currently imported) | **EXISTS** |
-| All interfaces (`I*.sol`) | Interface definitions | **DONE** (IERC20, IDatabase, ILumoriaToken, ITaxHandler, IModule, IFeeReceiver, IRebate, IFlatCurve, IGenerator, ILumoriaRouter, ILumoriaLiquidityVault, IVestingVault) |
+| All interfaces (`I*.sol`) | Interface definitions | **DONE** (IERC20, IDatabase, ILumoriaToken, ITaxHandler, IModule, IFeeReceiver, IRebate, IFlatCurve, IGenerator, ILumoriaRouter, ILumoriaLiquidityVault, IVestingVault, IRandomnessProvider) |
 
 ---
 
