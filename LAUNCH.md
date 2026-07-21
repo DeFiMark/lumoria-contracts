@@ -15,9 +15,9 @@ Critical path (closed-beta-first):
         ├─ ⬜ Slither / quick static pass
         │        │
         │        ▼
-        ├─ ⬜ MAINNET DEPLOY → ⬜ verify → ⬜ guarded smoke ──→ ⬜ CLOSED BETA (capped exposure)
-        │                                                            running IN PARALLEL with
-  ┌─ ✅ subgraph spec → ⬜ scaffold → ⬜ deploy ─┐                  ⬜ SECURITY AUDIT → ⬜ remediation
+        ├─ ✅ MAINNET DEPLOY → ✅ verify → ⬜ guarded smoke ──→ ⬜ CLOSED BETA (capped exposure)
+        │      (2026-07-21)                                          running IN PARALLEL with
+  ┌─ ✅ subgraph spec → ✅ scaffold → ✅ deploy (Goldsky) ─┐        ⬜ SECURITY AUDIT → ⬜ remediation
   ├─ ⬜ frontend integration (quoting/routing)   ┘                          │
   └ (hand the agents the docs; build alongside the beta)                    ▼
                                                           ⬜ OPEN / PUBLIC LAUNCH (audit-gated)
@@ -86,7 +86,7 @@ Validates the deploy + a real launch/buy against the **actual canonical V4 PoolM
 - [x] **Deploy-block recording** — `deploy-base.js` now writes `startBlock` for the manifest.
 - [x] **Scaffold the subgraph** — full implementation in `subgraph/` (7 singleton data sources + 7 dynamic templates + schema + 14 mappings), built from `SUBGRAPH.md`. **`graph codegen` + `graph build` both pass** (every event signature matches the compiled ABIs; all mappings compile to wasm).
 - [ ] Index a fork/testnet deployment; validate the queries the UI needs (token list, trades/OHLC, holders, rewards, raises, rebates, volume).
-- [ ] Deploy the subgraph: after mainnet deploy, `cd subgraph && npm i && npm run gen-networks && npm run build && npm run deploy:studio` (reads `deployments/bsc.json` addresses + `startBlock`).
+- [x] ✅ **Deployed to Goldsky (2026-07-21)** — `gen-networks` injected the mainnet addresses + startBlock `111199483`; `npm run deploy:goldsky` shipped **`lumoria-bsc/1.0.0`**, healthy and 100% synced. API: `https://api.goldsky.com/api/public/project_cmg2x3lrvy37d01vq4bsnbtig/subgraphs/lumoria-bsc/1.0.0/gn`. (Studio path kept as `deploy:studio` if ever needed.)
 
 ## 5. Frontend Integration (⬜ — can run parallel with audit)
 
@@ -98,11 +98,11 @@ Validates the deploy + a real launch/buy against the **actual canonical V4 PoolM
 
 ## 6. Mainnet Deploy (⬜ — for the closed beta; audit runs in parallel)
 
-- [ ] `.env`: `DEPLOYER_PK` (funded with enough BNB for ~17 deploys + hook mining), **`FEE_RECIPIENT` explicitly set**, `ETHERSCAN_API_KEY` (Etherscan V2 unified key — covers BscScan; the old per-chain BscScan keys are sunset). Optionally `LUMORIA_OPERATORS` (comma-separated backend addresses) — unset ships module execution permissionless; see TOKENOMICS_V2 §6.2. ✅ `BSC_RPC` already set (Alchemy, archive-capable).
-- [ ] `npm run deploy:bsc` → writes `deployments/bsc.json` (uses canonical PoolManager + periphery).
-- [ ] `npm run verify:bsc` — verify all contracts on BscScan (note: PoolManager verify is best-effort; it's canonical/pre-verified on mainnet, the script try/catches it).
-- [ ] `npm run smoke:bsc`-equivalent / a guarded first real launch — confirm launch + buy + volume on mainnet.
-- [ ] Commit `deployments/bsc.json` (it is NOT gitignored — testnet/mainnet artifacts are meant to be committed).
+- [x] ✅ `.env` set: `DEPLOYER_PK`, `ETHERSCAN_API_KEY`, `BSC_RPC` (Alchemy, archive-capable — used for fork rehearsals). `FEE_RECIPIENT` left as deployer (deliberate — swap later via `FeeReceiver.setRecipient`). No `LUMORIA_OPERATORS` — shipped permissionless.
+- [x] ✅ **DEPLOYED to BSC mainnet (2026-07-21)** — `deployments/bsc.json`, startBlock `111199483`, deployer/owner `0x7F06…3A74`, ~0.03 BNB total cost. All addresses + config in [`deployments/DEPLOYMENTS.md`](./deployments/DEPLOYMENTS.md) (v1) with a frozen snapshot in `deployments/archive/`. ⚠️ Deploy via a **standard RPC** (`BSC_RPC=https://bsc-dataseed.binance.org npm run deploy:bsc`) — Alchemy's BNB endpoint returns `to:""` on pending creates, which crashes ethers v6 (one orphaned Database at nonce 0, see DEPLOYMENTS.md notes).
+- [x] ✅ **All 19 contracts verified on BscScan** via Etherscan V2 (`npm run verify:bsc`), zero failures.
+- [ ] `npm run smoke:bsc`-equivalent / a guarded first real launch — confirm launch + buy + volume on mainnet. **Deliberate step: permanently locks the seed BNB (~0.105).**
+- [x] ✅ Committed `deployments/bsc.json` + archive + registry.
 
 ## 7. Post-Deploy (⏸️ / ⬜)
 

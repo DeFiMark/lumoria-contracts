@@ -11,6 +11,7 @@
     "build": "graph build --network bsc",
     "build:local": "graph build",
     "deploy:studio": "graph deploy lumoria --network bsc",
+    "deploy:goldsky": "goldsky subgraph deploy lumoria-bsc/1.0.0 --path .",
     "create:local": "graph create --node http://localhost:8020/ lumoria",
     "deploy:local": "graph deploy --node http://localhost:8020/ --ipfs http://localhost:5001 lumoria"
   },
