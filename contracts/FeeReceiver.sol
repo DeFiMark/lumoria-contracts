@@ -4,13 +4,18 @@ pragma solidity 0.8.28;
 /**
     Lumoria Fee Receiver
 
-    Collects all platform 1% BNB fees from:
-    - Router (trading fees)
-    - FlatCurve (raise contribution fees)
-    - Generator (BYOL launch fees)
+    Collects all platform BNB fees:
+    - receiveTradeFee  — LumoriaHook (every buy/sell, any router) and
+                         FlatCurve raise contributions, with trader context
+    - receiveLaunchFee — Generator flat launch fees (both modes), with
+                         creator context
+    - receiveFee       — generic tagged inflow (future callers)
 
-    Simple collector for now. Can be extended later for
-    revenue splitting, buyback, staking rewards, etc.
+    Simple accrue-and-withdraw collector for now. The Database can be
+    repointed to a richer implementation later (revenue splitting, buyback,
+    wager tracking on trades, staking rewards, ...) — the typed functions
+    exist so that future contract receives full context from the frozen
+    hook without any hook change.
  */
 
 import "./lib/Ownable.sol";
@@ -35,13 +40,35 @@ contract FeeReceiver is Ownable, IFeeReceiver {
 
     // ─── Fee Receiving ──────────────────────────────────────────────
 
-    /// @notice Called by Router/FlatCurve/Generator with a token tag for analytics
-    function receiveFee(address token) external payable override {
+    /// @dev Shared accrual. FeeReceived is emitted on every inflow — it is
+    ///      the single source for the platform fee total (see IFeeReceiver).
+    function _accrue(address token) internal {
         require(msg.value > 0, "Zero fee");
         totalReceived += msg.value;
         feesByToken[token] += msg.value;
         emit FeeReceived(msg.sender, msg.value);
+    }
+
+    /// @notice Generic tagged inflow (no trade/launch context).
+    function receiveFee(address token) external payable override {
+        _accrue(token);
         emit TokenFeeReceived(token, msg.value);
+    }
+
+    /// @notice Trade-flow fees: hook swaps + FlatCurve contributions.
+    function receiveTradeFee(address token, address user, uint256 tradeAmount, bool isBuy)
+        external
+        payable
+        override
+    {
+        _accrue(token);
+        emit TradeFeeReceived(token, user, msg.value, tradeAmount, isBuy);
+    }
+
+    /// @notice Flat launch fees (Generator, both launch modes).
+    function receiveLaunchFee(address token, address user) external payable override {
+        _accrue(token);
+        emit LaunchFeeReceived(token, user, msg.value);
     }
 
     /// @notice Accept untagged BNB (fallback for simple sends)

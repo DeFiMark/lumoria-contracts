@@ -38,6 +38,65 @@ describe("FeeReceiver", function () {
         });
     });
 
+    describe("receiveTradeFee", function () {
+        it("rejects zero-value calls", async function () {
+            const { feeReceiver, signers } = await loadFixture(deployBase);
+            await expect(
+                feeReceiver.receiveTradeFee(ethers.ZeroAddress, signers.user1.address, 100, true, { value: 0 })
+            ).to.be.revertedWith("Zero fee");
+        });
+
+        it("accrues and emits FeeReceived + TradeFeeReceived with full context", async function () {
+            const { feeReceiver, signers } = await loadFixture(deployBase);
+            const fakeToken = signers.user2.address;
+            const tradeAmount = ethers.parseEther("1");
+            const fee = ethers.parseEther("0.01");
+            await expect(
+                feeReceiver.receiveTradeFee(fakeToken, signers.user1.address, tradeAmount, false, { value: fee })
+            )
+                .to.emit(feeReceiver, "FeeReceived")
+                .and.to.emit(feeReceiver, "TradeFeeReceived")
+                .withArgs(fakeToken, signers.user1.address, fee, tradeAmount, false);
+
+            expect(await feeReceiver.totalReceived()).to.equal(fee);
+            expect(await feeReceiver.feesByToken(fakeToken)).to.equal(fee);
+        });
+
+        it("accepts address(0) as user (unattributed third-party-router swaps)", async function () {
+            const { feeReceiver, signers } = await loadFixture(deployBase);
+            const fakeToken = signers.user2.address;
+            await expect(
+                feeReceiver.receiveTradeFee(fakeToken, ethers.ZeroAddress, 500, true, { value: 5 })
+            )
+                .to.emit(feeReceiver, "TradeFeeReceived")
+                .withArgs(fakeToken, ethers.ZeroAddress, 5, 500, true);
+        });
+    });
+
+    describe("receiveLaunchFee", function () {
+        it("rejects zero-value calls", async function () {
+            const { feeReceiver, signers } = await loadFixture(deployBase);
+            await expect(
+                feeReceiver.receiveLaunchFee(ethers.ZeroAddress, signers.user1.address, { value: 0 })
+            ).to.be.revertedWith("Zero fee");
+        });
+
+        it("accrues and emits FeeReceived + LaunchFeeReceived with creator context", async function () {
+            const { feeReceiver, signers } = await loadFixture(deployBase);
+            const fakeToken = signers.user2.address;
+            const fee = ethers.parseEther("0.02");
+            await expect(
+                feeReceiver.receiveLaunchFee(fakeToken, signers.user1.address, { value: fee })
+            )
+                .to.emit(feeReceiver, "FeeReceived")
+                .and.to.emit(feeReceiver, "LaunchFeeReceived")
+                .withArgs(fakeToken, signers.user1.address, fee);
+
+            expect(await feeReceiver.totalReceived()).to.equal(fee);
+            expect(await feeReceiver.feesByToken(fakeToken)).to.equal(fee);
+        });
+    });
+
     describe("receive (untagged fallback)", function () {
         it("accepts raw BNB sends and updates totalReceived", async function () {
             const { feeReceiver, signers } = await loadFixture(deployBase);

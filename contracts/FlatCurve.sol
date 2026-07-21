@@ -151,7 +151,11 @@ contract FlatCurve is IFlatCurve, ReentrancyGuard {
         require(totalRaised + net <= hardCap, "FlatCurve: exceeds hardCap");
 
         if (platformFee > 0) {
-            IFeeReceiver(IDatabase(database).feeReceiver()).receiveFee{value: platformFee}(token);
+            // Contributions are trade-like flow: forward with contributor
+            // context (gross contribution as tradeAmount, buy direction).
+            IFeeReceiver(IDatabase(database).feeReceiver()).receiveTradeFee{value: platformFee}(
+                token, msg.sender, msg.value, true
+            );
             emit PlatformFeeTaken(platformFee);
         }
 

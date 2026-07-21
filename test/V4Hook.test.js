@@ -90,7 +90,11 @@ describe("V4: LumoriaHook fee collection", function () {
                 anyValue,  // tokensOut
                 anyValue,  // sqrtPriceX96 — post-swap pool price (§13.1)
                 anyValue,  // tick
-            );
+            )
+            // The platform share arrives with full trade context (user, gross
+            // size, direction) so a future FeeReceiver can act on trades.
+            .and.to.emit(base.feeReceiver, "TradeFeeReceived")
+            .withArgs(tokenAddr, user1.address, expectedPlatform, bnbIn, true);
 
         expect((await base.feeReceiver.totalReceived()) - feeBefore).to.equal(expectedPlatform);
         expect(await taxOwed(base, tokenAddr, taxRecipient.address)).to.equal(expectedTax);
@@ -140,6 +144,18 @@ describe("V4: LumoriaHook fee collection", function () {
         expect(evTax).to.equal(((gross - evPlatform) * 1000n) / BPS);
 
         expect((await base.feeReceiver.totalReceived()) - feeBefore).to.equal(evPlatform);
+
+        // Sell-side trade context: gross BNB out as tradeAmount, isBuy=false.
+        const tradeFeeLog = receipt.logs
+            .map((log) => { try { return base.feeReceiver.interface.parseLog(log); } catch { return null; } })
+            .find((parsed) => parsed && parsed.name === "TradeFeeReceived");
+        expect(tradeFeeLog, "TradeFeeReceived event").to.not.equal(undefined);
+        expect(tradeFeeLog.args[0]).to.equal(tokenAddr);
+        expect(tradeFeeLog.args[1]).to.equal(user1.address);
+        expect(tradeFeeLog.args[2]).to.equal(evPlatform);
+        expect(tradeFeeLog.args[3]).to.equal(gross);
+        expect(tradeFeeLog.args[4]).to.equal(false);
+
         // buyFee is 0 in this test, so all accrual comes from the sell leg.
         expect(await taxOwed(base, tokenAddr, taxRecipient.address)).to.equal(evTax);
         expect((await ethers.provider.getBalance(user2.address)) - receiverBefore).to.equal(evBnbOut);
@@ -324,11 +340,13 @@ describe("V4: taxes cannot be bypassed (raw PoolManager access)", function () {
         const feeBefore = await base.feeReceiver.totalReceived();
         const tokenVolBefore = await base.database.tokenVolume(tokenAddr);
 
-        await raw.connect(user1).rawSwap(
+        // No hookData → the FeeReceiver still gets the fee, with user address(0).
+        await expect(raw.connect(user1).rawSwap(
             key,
             { zeroForOne: true, amountSpecified: -bnbIn, sqrtPriceLimitX96: MIN_SQRT_PRICE_LIMIT },
             { value: bnbIn },
-        );
+        )).to.emit(base.feeReceiver, "TradeFeeReceived")
+            .withArgs(tokenAddr, ethers.ZeroAddress, expectedPlatform, bnbIn, true);
 
         expect((await base.feeReceiver.totalReceived()) - feeBefore).to.equal(expectedPlatform);
         expect(await taxOwed(base, tokenAddr, taxRecipient.address)).to.equal(expectedTax);

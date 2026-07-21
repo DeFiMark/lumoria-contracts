@@ -232,7 +232,7 @@ contract LumoriaHook is BaseHook {
 
     // ─── Swap: Buy Fees (beforeSwap) ────────────────────────────────
 
-    function _beforeSwap(address, PoolKey calldata key, SwapParams calldata params, bytes calldata)
+    function _beforeSwap(address, PoolKey calldata key, SwapParams calldata params, bytes calldata hookData)
         internal
         override
         returns (bytes4, BeforeSwapDelta, uint24)
@@ -261,7 +261,7 @@ contract LumoriaHook is BaseHook {
         // PoolManager after afterSwap, netting our take() debt to zero —
         // the swapper ends up paying the fee.
         poolManager.take(key.currency0, address(this), totalFee);
-        _forward(token, platformFee, tax, true);
+        _forward(token, _decodeUser(hookData), bnbIn, platformFee, tax, true);
 
         return (IHooks.beforeSwap.selector, toBeforeSwapDelta(totalFee.toInt128(), 0), 0);
     }
@@ -310,7 +310,7 @@ contract LumoriaHook is BaseHook {
 
         if (totalFee > 0) {
             poolManager.take(key.currency0, address(this), totalFee);
-            _forward(token, platformFee_, tax_, false);
+            _forward(token, user, bnbOutGross, platformFee_, tax_, false);
         }
 
         database.registerVolume(token, user, bnbOutGross);
@@ -343,13 +343,26 @@ contract LumoriaHook is BaseHook {
         tax = ((bnbIn - platformFee) * ITaxHandler(database.tokenTaxHandler(token)).buyFee()) / BPS;
     }
 
-    /// @dev Forwards collected BNB: platform share to the FeeReceiver,
+    /// @dev Forwards collected BNB: platform share to the FeeReceiver (with
+    ///      full trade context — user, gross trade size, direction — so a
+    ///      future FeeReceiver implementation can act on trades on-chain),
     ///      tax share to the token's TaxHandler (which distributes to the
     ///      tokenomics modules in the same transaction — "immediate
     ///      distribution" is preserved from the legacy design).
-    function _forward(address token, uint256 platformFee, uint256 tax, bool isBuy) internal {
+    ///      `user` is address(0) for third-party-router swaps (no hookData).
+    ///      `tradeAmount` is gross BNB: bnbIn on buys, bnbOutGross on sells.
+    function _forward(
+        address token,
+        address user,
+        uint256 tradeAmount,
+        uint256 platformFee,
+        uint256 tax,
+        bool isBuy
+    ) internal {
         if (platformFee > 0) {
-            IFeeReceiver(database.feeReceiver()).receiveFee{value: platformFee}(token);
+            IFeeReceiver(database.feeReceiver()).receiveTradeFee{value: platformFee}(
+                token, user, tradeAmount, isBuy
+            );
         }
         if (tax > 0) {
             ITaxHandler handler = ITaxHandler(database.tokenTaxHandler(token));
