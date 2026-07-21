@@ -5,7 +5,8 @@
  * contract with the correct constructor arguments. Master copies have no
  * constructor args; core contracts do.
  *
- * Requires BSCSCAN_API_KEY in env (see hardhat.config.js).
+ * Requires ETHERSCAN_API_KEY in env — Etherscan V2 unified key, covers BSC
+ * (see hardhat.config.js).
  *
  * Run:
  *   npx hardhat run scripts/verify.js --network bscTestnet
@@ -63,6 +64,7 @@ async function main() {
     verify(core.vestingVault, [core.database], "contracts/VestingVault.sol:VestingVault");
     verify(core.router, [v4.poolManager, core.database], "contracts/v4/LumoriaSwapRouter.sol:LumoriaSwapRouter");
     verify(core.generator, [core.database]);
+    verify(core.randomnessProvider, [core.database], "contracts/TrustedOperatorRandomness.sol:TrustedOperatorRandomness");
 
     // PoolManager: only ours to verify when we deployed it (bscTestnet).
     // On bsc mainnet the canonical Uniswap deployment is already verified.
@@ -78,6 +80,8 @@ async function main() {
     verify(masterCopies.reward, []);
     verify(masterCopies.burn, []);
     verify(masterCopies.liquidity, []);
+    verify(masterCopies.prizePool, [], "contracts/modules/PrizePool.sol:PrizePool");
+    verify(masterCopies.milestone, [], "contracts/modules/MilestoneRewardModule.sol:MilestoneRewardModule");
 
     console.log("\n✓ Verification pass complete.\n");
 }

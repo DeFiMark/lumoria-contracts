@@ -2,8 +2,11 @@ require("@nomicfoundation/hardhat-toolbox");
 require("dotenv").config();
 
 /**
- * The toolbox already wires hardhat-verify (BscScan uses the Etherscan-compatible API).
- * Export BSCSCAN_API_KEY to enable `npx hardhat verify`.
+ * The toolbox already wires hardhat-verify. Etherscan V2 unified API keys:
+ * one ETHERSCAN_API_KEY now covers all chains (BscScan included) via
+ * https://api.etherscan.io/v2/api?chainid=56. Export ETHERSCAN_API_KEY to
+ * enable `npx hardhat verify` (BSCSCAN_API_KEY still accepted as a fallback
+ * name for older .env files).
  */
 
 /**
@@ -96,11 +99,11 @@ module.exports = {
     },
     networks,
     etherscan: {
-        // BscScan uses the Etherscan-compatible API; one key works for both networks.
-        apiKey: {
-            bsc: process.env.BSCSCAN_API_KEY || "",
-            bscTestnet: process.env.BSCSCAN_API_KEY || "",
-        },
+        // Etherscan V2: a single unified key covers every chain (the API routes
+        // by ?chainid=). The single-string form is what selects the V2 endpoint
+        // in hardhat-verify ≥2.1 — don't switch back to the per-network object,
+        // that's the deprecated V1 path and BscScan's V1 API has been sunset.
+        apiKey: process.env.ETHERSCAN_API_KEY || process.env.BSCSCAN_API_KEY || "",
     },
     paths: {
         sources: "./contracts",

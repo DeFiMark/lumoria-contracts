@@ -8,7 +8,8 @@
  *   2. Database(wbnb)
  *   3. FeeReceiver(platformRecipient)
  *   4. RebateContract(database)
- *   5. Master copies            — Token, TaxHandler, FlatCurve, 4 modules
+ *   5. Master copies            — Token, TaxHandler, FlatCurve, 6 modules
+ *                                 (+ TrustedOperatorRandomness singleton)
  *   6. Uniswap V4 PoolManager   — CANONICAL address on bsc; deployed fresh on
  *                                 bscTestnet/local (BUSL-1.1 permits non-production
  *                                 use; Uniswap has no official BSC-testnet deployment).
@@ -59,6 +60,8 @@ const MODULE_TYPE = {
     BURN: 1,
     LIQUIDITY: 2,
     CREATOR: 3,
+    PRIZE: 4,
+    MILESTONE: 5,
 };
 
 async function deployContract(name, args = []) {
@@ -121,6 +124,12 @@ async function main() {
     const rewardMC = await deployContract("RewardModule");
     const burnMC = await deployContract("BurnModule");
     const liquidityMC = await deployContract("LiquidityModule");
+    const prizeMC = await deployContract("PrizePool");
+    const milestoneMC = await deployContract("MilestoneRewardModule");
+
+    // Platform-wide randomness provider (PrizePool lottery draws — V2 §3.2b).
+    // Operator-gated via the same Database registry as module execution.
+    const randomness = await deployContract("TrustedOperatorRandomness", [databaseAddr]);
 
     // ── 6. Uniswap V4 PoolManager ─────────────────────────────────
     let poolManagerAddr;
@@ -172,6 +181,9 @@ async function main() {
     await tx("setModuleMasterCopy(BURN)",      database.setModuleMasterCopy(MODULE_TYPE.BURN, await burnMC.getAddress()));
     await tx("setModuleMasterCopy(LIQUIDITY)", database.setModuleMasterCopy(MODULE_TYPE.LIQUIDITY, await liquidityMC.getAddress()));
     await tx("setModuleMasterCopy(CREATOR)",   database.setModuleMasterCopy(MODULE_TYPE.CREATOR, await creatorMC.getAddress()));
+    await tx("setModuleMasterCopy(PRIZE)",     database.setModuleMasterCopy(MODULE_TYPE.PRIZE, await prizeMC.getAddress()));
+    await tx("setModuleMasterCopy(MILESTONE)", database.setModuleMasterCopy(MODULE_TYPE.MILESTONE, await milestoneMC.getAddress()));
+    await tx("setRandomnessProvider",          database.setRandomnessProvider(await randomness.getAddress()));
 
     // ── 12. Authorize the HOOK on RebateContract ──────────────────
     console.log("\nAuthorizing hook as rebate creditor...");
@@ -222,6 +234,7 @@ async function main() {
             router:          await router.getAddress(),
             generator:       await generator.getAddress(),
             create2Deployer: await create2Deployer.getAddress(),
+            randomnessProvider: await randomness.getAddress(),
         },
         v4: {
             poolManager: poolManagerAddr,
@@ -245,6 +258,8 @@ async function main() {
             reward:      await rewardMC.getAddress(),
             burn:        await burnMC.getAddress(),
             liquidity:   await liquidityMC.getAddress(),
+            prizePool:   await prizeMC.getAddress(),
+            milestone:   await milestoneMC.getAddress(),
         },
     };
 
