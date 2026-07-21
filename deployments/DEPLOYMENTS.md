@@ -8,7 +8,23 @@ changes. When redeploying, add a new section at the top and a new archive file
 
 ---
 
-## v1 — BSC Mainnet (2026-07-21) — CURRENT
+## v1.1 — BSC Mainnet delta (2026-07-21) — CURRENT
+
+PrizePool master copy replaced (no tokens existed yet, so no clone drift):
+`rootPoster == address(0)` now delegates root posting to the **platform
+operator registry** (`Database.isOperator` — owner-managed, rotatable) instead
+of reverting at init; a non-zero rootPoster remains an explicit per-token
+override, and there is deliberately NO permissionless fallback (unsettled
+epochs roll over). The launch wizard always passes zero and no longer
+surfaces the field.
+
+| | |
+|---|---|
+| PrizePool master copy (type 4) | `0xc53D1dA4c98C837d2b43EDDDC2E9933c92dCACbb` (verified; replaces `0x8bf6…A008`, kept in `bsc.json` as `masterCopies.prizePoolV1`) |
+| Platform operator registered | `0x7868fA54d5a96A31Cd07eDE9E6D2A280De9ef484` — flips module execution to operator-first (1h public fallback) and is the root-posting authority for operator-settled prize pools |
+| Script | `scripts/redeploy-prizepool-mc.js` |
+
+## v1 — BSC Mainnet (2026-07-21)
 
 | | |
 |---|---|

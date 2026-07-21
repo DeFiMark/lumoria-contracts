@@ -252,8 +252,14 @@ otherwise lets a whale simply buy the odds.
 The ordering is load-bearing. **The root is committed before randomness exists.**
 
 **Phase 1 — `postRoot(epochId, root, totalWeight, ticketCount)`**
-Callable once per epoch, only after the epoch has ended, only by `rootPoster`.
-Rejects if the epoch has already been settled.
+Callable once per epoch, only after the epoch has ended. Gating (v1.1):
+`rootPoster != 0` → only that address (explicit per-token override);
+`rootPoster == 0` → any address in the **platform operator registry**
+(`Database.isOperator` — owner-managed and rotatable, which a frozen
+per-token EOA is not). This is the recommended default and what the launch
+wizard always passes. Root posting is a trusted attestation, so there is NO
+permissionless fallback while `operatorCount == 0` — un-posted epochs roll
+over. Rejects if the epoch has already been settled.
 
 **Phase 2 — `drawRandomness(epochId)`** *(LOTTERY only)*
 Requires `roots[epochId] != 0`. Calls `IRandomnessProvider.requestRandomness`.
@@ -821,7 +827,8 @@ Not everything needs to be atomic. Three things run off-chain:
 `TokenPurchased` logs, so any third party can recompute it and detect a
 fraudulent one. For v1:
 
-- `rootPoster` is a platform-controlled address.
+- Root posting is platform-controlled: the operator registry by default
+  (`rootPoster == 0`, v1.1), or an explicit `rootPoster` override per token.
 - A `challengeWindow` (suggested 6h) elapses between `postRoot` and the first
   claim, during which `Database.owner()` may `invalidateRoot(epochId)` — which
   rolls the pot over rather than paying out.

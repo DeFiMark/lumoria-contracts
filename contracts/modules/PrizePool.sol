@@ -181,9 +181,13 @@ contract PrizePool is IModule, IRandomnessConsumer, ReentrancyGuard {
         if (payoutMode_ == LOTTERY) {
             require(winnerCount_ >= 1 && winnerCount_ <= MAX_WINNERS, "Bad winner count");
         }
-        if (payoutMode_ != ALL_HOLDERS) {
-            require(rootPoster_ != address(0), "Zero rootPoster");
-        }
+        // rootPoster == address(0) means "the platform operator registry
+        // posts roots" (Database.isOperator — owner-managed and ROTATABLE,
+        // unlike this per-token field, which is frozen at init). A non-zero
+        // rootPoster is an explicit per-token override. Root posting is a
+        // trusted attestation, so unlike module execution there is NO
+        // permissionless fallback while operatorCount == 0 — un-posted
+        // epochs simply roll over until operators exist.
 
         _initialized = true;
         _status = _NOT_ENTERED;
@@ -246,7 +250,9 @@ contract PrizePool is IModule, IRandomnessConsumer, ReentrancyGuard {
 
     // ─── Phase 1: postRoot (§2.6) ───────────────────────────────────
 
-    /// @notice Commit the epoch's ticket-set root. rootPoster only, once, only
+    /// @notice Commit the epoch's ticket-set root. Gated to the per-token
+    ///         rootPoster if one was set at init, otherwise to the platform
+    ///         operator registry (Database.isOperator). Once per epoch, only
     ///         after the epoch ends, and ALWAYS before randomness exists.
     ///         Thin/empty epochs roll over here instead of settling.
     function postRoot(
@@ -256,7 +262,11 @@ contract PrizePool is IModule, IRandomnessConsumer, ReentrancyGuard {
         uint256 ticketCount
     ) external nonReentrant {
         require(payoutMode != ALL_HOLDERS, "Wrong mode");
-        require(msg.sender == rootPoster, "Only rootPoster");
+        if (rootPoster != address(0)) {
+            require(msg.sender == rootPoster, "Only rootPoster");
+        } else {
+            require(IDatabase(database).isOperator(msg.sender), "Only operator");
+        }
         _advance();
         require(epochId < currentEpochId, "Epoch not ended");
 

@@ -177,7 +177,6 @@ describe("PrizePool", function () {
                 [{ ...good, settleBountyBps: 501n }, "Bad bounty"],
                 [{ ...good, payoutMode: PAYOUT_MODE.LOTTERY, winnerCount: 0 }, "Bad winner count"],
                 [{ ...good, payoutMode: PAYOUT_MODE.LOTTERY, winnerCount: 11 }, "Bad winner count"],
-                [{ ...good, rootPoster: ethers.ZeroAddress }, "Zero rootPoster"],
             ];
             for (const [cfg, msg] of cases) {
                 await expect(raw.__init__(buildPrizePoolInitData(cfg)))
@@ -297,6 +296,41 @@ describe("PrizePool", function () {
             await expect(
                 l.prize.connect(base.signers.keeper).postRoot(0, s.root, s.totalWeight, 1),
             ).to.be.revertedWith("Already settled");
+        });
+
+        it("rootPoster == 0 delegates to the platform operator registry (no permissionless fallback)", async function () {
+            const base = await fixture();
+            const l = await launchWithPrize(base, { rootPoster: ethers.ZeroAddress });
+            await fund(l, E("10"));
+            const s = buildProRataSettlement([
+                { account: base.signers.user1.address, weight: E("1"), tokensBought: 0n },
+            ]);
+            await time.increase(DAY + 1);
+
+            // No operators registered → nobody may post; the epoch just waits.
+            await expect(
+                l.prize.connect(base.signers.keeper).postRoot(0, s.root, s.totalWeight, 1),
+            ).to.be.revertedWith("Only operator");
+
+            // Register an operator → that address may post.
+            await base.database.connect(base.signers.owner).setOperator(base.signers.keeper.address, true);
+            await expect(l.prize.connect(base.signers.keeper).postRoot(0, s.root, s.totalWeight, 1))
+                .to.emit(l.prize, "RootPosted").withArgs(0, s.root, s.totalWeight, 1);
+        });
+
+        it("an explicit rootPoster overrides the registry — operators may NOT post", async function () {
+            const base = await fixture();
+            const l = await launchWithPrize(base); // rootPoster = keeper (explicit)
+            await fund(l, E("10"));
+            const s = buildProRataSettlement([
+                { account: base.signers.user1.address, weight: E("1"), tokensBought: 0n },
+            ]);
+            await time.increase(DAY + 1);
+
+            await base.database.connect(base.signers.owner).setOperator(base.signers.user2.address, true);
+            await expect(
+                l.prize.connect(base.signers.user2).postRoot(0, s.root, s.totalWeight, 1),
+            ).to.be.revertedWith("Only rootPoster");
         });
 
         it("pays the settle bounty out of the pot", async function () {
