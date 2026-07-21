@@ -83,6 +83,7 @@ export function getOrCreatePlatformConfig(): PlatformConfig {
   if (p == null) {
     p = new PlatformConfig(PLATFORM_ID);
     p.platformFeeBps = ZERO_BI;
+    p.launchFeeBnb = ZERO_BI;
     p.totalFeesReceivedBnb = ZERO_BI;
     p.totalTokens = 0;
     p.totalVolumeBnb = ZERO_BI;

@@ -235,6 +235,45 @@ Reference implementation of these encoders: `test/fixtures/deploy.js` →
 
 ---
 
+## 3a. BREAKING: launch fees are now a FLAT anti-spam fee — msg.value math changed
+
+The BYOL 1% skim on the creator's LP seed is **gone**. Instead, every
+`generateProject` call (both modes) charges a flat fee of
+**`Database.launchFeeBnb()`** (0.005 BNB at deploy; owner-tunable, ≤ 1 BNB;
+can be 0). The wizard MUST read it live and build `msg.value` as:
+
+- **BYOL:** `msg.value = launchFeeBnb + <BNB for LP>` — everything after the
+  flat fee seeds the pool. Show creators "Liquidity: X BNB + 0.005 BNB launch
+  fee"; the old "1% platform fee on your liquidity" copy is wrong now.
+- **FLAT_CURVE:** `msg.value = launchFeeBnb` **exactly** (was 0). Any other
+  value reverts.
+
+Also: `BYOLLaunched` lost its `platformFee` param — now
+`BYOLLaunched(token, tokensForLP, bnbForLP)`. Launch-fee context lives on
+`FeeReceiver.LaunchFeeReceived(token, creator, fee)`. New Database members:
+`launchFeeBnb()`, `setLaunchFee(uint256)` (owner), `LaunchFeeUpdated(old,new)`
+(indexed into `PlatformConfig.launchFeeBnb`).
+
+## 3b. ABI CHANGE: FeeReceiver now has typed, context-carrying receive functions
+
+The hook, FlatCurve and Generator no longer call `receiveFee(token)` — they call:
+
+- `receiveTradeFee(token, user, tradeAmount, isBuy)` — every hook swap (any
+  router; `user = address(0)` without hookData) and every FlatCurve
+  contribution (`isBuy = true`, gross contribution as `tradeAmount`)
+- `receiveLaunchFee(token, user)` — Generator BYOL launches (`user` = creator)
+
+New events: `TradeFeeReceived(token, user, fee, tradeAmount, isBuy)` and
+`LaunchFeeReceived(token, user, fee)`. `FeeReceived(from, amount)` still fires
+on **every** inflow and remains the single revenue-total source (the subgraph's
+platform-fee handler is unchanged). `receiveFee(token)`/`TokenFeeReceived`
+remain in the ABI but currently have no callers.
+
+**Frontend work:** refresh the FeeReceiver ABI. Nothing else — no UI calls
+these payable functions. The new events exist so a *future* FeeReceiver
+implementation (swapped via `Database.setFeeReceiver`) can act on per-user
+trade flow on-chain; analytics may index them for per-user fee context.
+
 ## 4. New reads and writes worth surfacing
 
 | Contract | Member | Use |

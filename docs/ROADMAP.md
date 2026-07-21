@@ -86,7 +86,7 @@ Built the TaxHandler (per-token BNB distributor with 24h timelock for all creato
 
 ### Fee flow (identical math to the old Router)
 
-- **Buy (BNB→token, exactIn)** — `beforeSwap` + `beforeSwapReturnDelta`: hook takes `platformFee = bnbIn × platformFeeBps / 10000` then `tax = (bnbIn − platformFee) × buyFee / 10000` from the BNB input via `poolManager.take()`, forwards immediately (`FeeReceiver.receiveFee{value}(token)`, `TaxHandler.receiveBuyTax{value}()`), returns a `BeforeSwapDelta` so only the remainder swaps.
+- **Buy (BNB→token, exactIn)** — `beforeSwap` + `beforeSwapReturnDelta`: hook takes `platformFee = bnbIn × platformFeeBps / 10000` then `tax = (bnbIn − platformFee) × buyFee / 10000` from the BNB input via `poolManager.take()`, forwards immediately (`FeeReceiver.receiveTradeFee{value}(token, user, bnbIn, true)`, `TaxHandler.receiveBuyTax{value}()`), returns a `BeforeSwapDelta` so only the remainder swaps.
 - **Sell (token→BNB, exactIn)** — `afterSwap` + `afterSwapReturnDelta`: hook reads actual BNB output from `BalanceDelta`, takes `platformFee` then `sellFee` portion, forwards, returns the `int128` hook delta so the user receives the remainder.
 - **Rebates + volume** — in `afterSwap` on buys the hook decodes `hookData = abi.encode(address user)` (supplied by our `LumoriaSwapRouter`), calls `RebateContract.creditRebate(token, user, tokensOut)` (silent-exit semantics unchanged) and `Database.registerVolume(token, user, bnbAmount)`. Empty `hookData` (third-party routers) → taxes still collected, rebate + per-user volume skipped, `tokenVolume` still tracked.
 - **Events** — hook emits `TokenPurchased` / `TokenSold` with the same fields as the old Router events (subgraph continuity).

@@ -72,8 +72,10 @@ async function main() {
 
     const liquidityBNB = hre.ethers.parseEther("0.1");
     const buyBNB = hre.ethers.parseEther("0.01");
+    // Flat anti-spam launch fee, paid on top of the LP seed.
+    const launchFee = await database.launchFeeBnb();
 
-    console.log(`\nLaunching BYOL token (0.1 BNB liquidity + tokensForLP=${tokensForLP})...`);
+    console.log(`\nLaunching BYOL token (0.1 BNB liquidity + ${hre.ethers.formatEther(launchFee)} BNB launch fee + tokensForLP=${tokensForLP})...`);
     const launchTx = await generator.generateProject(
         "SmokeToken",
         "SMOKE",
@@ -84,7 +86,7 @@ async function main() {
         byolPayload,
         [], // no creator allocations in the smoke test
         salt,
-        { value: liquidityBNB },
+        { value: liquidityBNB + launchFee },
     );
     const rcpt = await launchTx.wait();
     console.log(`  tx: ${rcpt.hash} (gas: ${rcpt.gasUsed})`);

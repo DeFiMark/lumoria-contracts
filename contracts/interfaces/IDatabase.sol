@@ -8,6 +8,7 @@ interface IDatabase {
     event MasterCopyUpdated(string indexed copyType, address indexed newCopy);
     event ModuleMasterCopySet(uint8 indexed moduleType, address indexed masterCopy);
     event PlatformFeeUpdated(uint256 oldFee, uint256 newFee);
+    event LaunchFeeUpdated(uint256 oldFee, uint256 newFee);
     event VolumeRegistered(address indexed token, address indexed user, uint256 amount);
     event GeneratorUpdated(address indexed oldGenerator, address indexed newGenerator);
     event RouterUpdated(address indexed oldRouter, address indexed newRouter);
@@ -67,6 +68,9 @@ interface IDatabase {
 
     // Platform Fee
     function platformFeeBps() external view returns (uint256);
+
+    // Flat anti-spam launch fee (wei), charged per generateProject call
+    function launchFeeBnb() external view returns (uint256);
 
     // Volume
     function userVolume(address token, address user) external view returns (uint256);

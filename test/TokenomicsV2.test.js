@@ -372,6 +372,7 @@ describe("TokenomicsV2 Phase A", function () {
                 payload,
                 [],
                 salt,
+                { value: ethers.parseEther("0.005") }, // flat launch fee
             );
             const receipt = await tx.wait();
 

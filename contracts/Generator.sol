@@ -16,15 +16,22 @@ pragma solidity 0.8.28;
            reserves, and therefore the address excluded from reward-share
            tracking (exactly the role the V2 pair used to play).
         5. Registers the token in the Database.
-        6. Executes the launch mode:
-             - BYOL: 1% platform fee from msg.value, creator gets
-               (TOTAL_SUPPLY - tokensForLP) tokens, Router.addLiquidityETH
-               seeds the V4 pool via the LiquidityVault — liquidity is
-               permanently locked (the vault has no removal path).
-             - FLAT_CURVE: clones a FlatCurve, transfers it
+        6. Charges the flat anti-spam launch fee (`Database.launchFeeBnb`,
+           absolute wei, owner-tunable) — on EVERY launch mode, forwarded
+           to the FeeReceiver with creator context.
+        7. Executes the launch mode:
+             - BYOL: creator gets (TOTAL_SUPPLY - tokensForLP) tokens,
+               Router.addLiquidityETH seeds the V4 pool via the
+               LiquidityVault with ALL of (msg.value - launchFee) — no
+               percentage skim; the creator supplies their own liquidity.
+               Liquidity is permanently locked (the vault has no removal
+               path).
+             - FLAT_CURVE: msg.value must equal the launch fee exactly.
+               Clones a FlatCurve, transfers it
                (tokensForPresale + tokensForLP), gives the creator the
-               rest, initializes FlatCurve with the raise config. No BNB
-               changes hands here — raise BNB comes from contributors.
+               rest, initializes FlatCurve with the raise config. Raise
+               BNB comes from contributors (1% platform fee per
+               contribution, forwarded as trade-fee flow).
 
     The Generator holds no custody between transactions. Every call is
     self-contained.
@@ -56,7 +63,7 @@ contract Generator is IGenerator, ReentrancyGuard {
 
     // ─── Events ────────────────────────────────────────────────────
 
-    event BYOLLaunched(address indexed token, uint256 platformFee, uint256 tokensForLP, uint256 bnbForLP);
+    event BYOLLaunched(address indexed token, uint256 tokensForLP, uint256 bnbForLP);
 
     constructor(address _database) {
         require(_database != address(0), "Gen: zero database");
@@ -109,10 +116,20 @@ contract Generator is IGenerator, ReentrancyGuard {
         // 5. Register in the Database (the curated-token registry the hook checks)
         database.registerToken(token, msg.sender, taxHandler);
 
-        // 6. Launch mode (allocations are carved from the creator's remainder)
+        // 6. Flat anti-spam launch fee — charged on EVERY launch mode, on top
+        //    of whatever BNB the mode itself consumes (BYOL: the LP seed;
+        //    FLAT_CURVE: nothing). Absolute wei, owner-tunable on the Database.
+        uint256 launchFee = database.launchFeeBnb();
+        require(msg.value >= launchFee, "Gen: insufficient launch fee");
+        if (launchFee > 0) {
+            IFeeReceiver(database.feeReceiver()).receiveLaunchFee{value: launchFee}(token, msg.sender);
+        }
+
+        // 7. Launch mode (allocations are carved from the creator's remainder)
         if (launchMode == LaunchMode.BYOL) {
-            _launchBYOL(token, launchPayload, allocations);
+            _launchBYOL(token, launchPayload, allocations, msg.value - launchFee);
         } else {
+            require(msg.value == launchFee, "Gen: no BNB on FLAT_CURVE");
             _launchFlatCurve(token, taxHandler, launchPayload, allocations);
         }
 
@@ -123,18 +140,18 @@ contract Generator is IGenerator, ReentrancyGuard {
 
     // ─── BYOL Launch ───────────────────────────────────────────────
 
-    /// @dev payload = abi.encode(uint256 tokensForLP)
-    function _launchBYOL(address token, bytes calldata payload, AllocationData[] calldata allocations) internal {
+    /// @dev payload = abi.encode(uint256 tokensForLP). `forLP` is msg.value
+    ///      net of the flat launch fee — ALL of it seeds the pool (no
+    ///      percentage skim; the creator is supplying their own liquidity).
+    function _launchBYOL(
+        address token,
+        bytes calldata payload,
+        AllocationData[] calldata allocations,
+        uint256 forLP
+    ) internal {
         uint256 tokensForLP = abi.decode(payload, (uint256));
         require(tokensForLP > 0 && tokensForLP <= TOTAL_SUPPLY, "Gen: bad tokensForLP");
-        require(msg.value > 0, "Gen: zero BNB");
-
-        uint256 platformFee = (msg.value * database.platformFeeBps()) / BPS;
-        uint256 forLP = msg.value - platformFee;
-
-        if (platformFee > 0) {
-            IFeeReceiver(database.feeReceiver()).receiveFee{value: platformFee}(token);
-        }
+        require(forLP > 0, "Gen: zero BNB");
 
         // Carve creator-defined allocations out of the remainder, then hand the
         // creator whatever is left. Token transfers are tax-free (plain
@@ -159,7 +176,7 @@ contract Generator is IGenerator, ReentrancyGuard {
             token, tokensForLP, 0, 0, DEAD, block.timestamp
         );
 
-        emit BYOLLaunched(token, platformFee, tokensForLP, forLP);
+        emit BYOLLaunched(token, tokensForLP, forLP);
     }
 
     // ─── FlatCurve Launch ──────────────────────────────────────────
@@ -181,8 +198,6 @@ contract Generator is IGenerator, ReentrancyGuard {
         bytes calldata payload,
         AllocationData[] calldata allocations
     ) internal {
-        require(msg.value == 0, "Gen: no BNB on FLAT_CURVE");
-
         (
             uint256 hardCap_,
             ,

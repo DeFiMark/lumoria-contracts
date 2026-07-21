@@ -58,6 +58,12 @@ contract Database is Ownable, IDatabase {
     uint256 public override platformFeeBps; // 100 = 1%
     uint256 public constant MAX_PLATFORM_FEE = 500; // 5% hard cap
 
+    // Flat anti-spam fee charged by the Generator on every launch (both
+    // BYOL and FLAT_CURVE), on top of whatever BNB the launch mode itself
+    // consumes. Absolute BNB (wei), not bps.
+    uint256 public override launchFeeBnb;
+    uint256 public constant MAX_LAUNCH_FEE = 1 ether; // sanity cap
+
     // ─── Volume Tracking ────────────────────────────────────────────
 
     mapping(address => mapping(address => uint256)) public override userVolume;
@@ -69,6 +75,7 @@ contract Database is Ownable, IDatabase {
         require(_wbnb != address(0), "Zero WBNB");
         wbnb = _wbnb;
         platformFeeBps = 100; // 1%
+        launchFeeBnb = 0.005 ether;
     }
 
     // ─── Token Registry (called by Generator) ───────────────────────
@@ -218,5 +225,11 @@ contract Database is Ownable, IDatabase {
         require(_feeBps <= MAX_PLATFORM_FEE, "Exceeds max");
         emit PlatformFeeUpdated(platformFeeBps, _feeBps);
         platformFeeBps = _feeBps;
+    }
+
+    function setLaunchFee(uint256 _launchFeeBnb) external onlyOwner {
+        require(_launchFeeBnb <= MAX_LAUNCH_FEE, "Exceeds max");
+        emit LaunchFeeUpdated(launchFeeBnb, _launchFeeBnb);
+        launchFeeBnb = _launchFeeBnb;
     }
 }

@@ -39,6 +39,8 @@ dataSources:
           handler: handleVolumeRegistered
         - event: PlatformFeeUpdated(uint256,uint256)
           handler: handlePlatformFeeUpdated
+        - event: LaunchFeeUpdated(uint256,uint256)
+          handler: handleLaunchFeeUpdated
 
   # ─── Generator (launches + allocations) ────────────────────────────
   - kind: ethereum

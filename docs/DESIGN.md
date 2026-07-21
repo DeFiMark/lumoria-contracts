@@ -215,8 +215,13 @@ mapping(address => address) public tokenCreator;      // token => creator
 address[] public allTokens;
 
 // Platform Fee Config
-uint256 public platformFeeBps;  // 100 = 1%
+uint256 public platformFeeBps;  // 100 = 1% (MAX_PLATFORM_FEE = 500)
 address public platformFeeRecipient;  // = feeReceiver
+
+// Flat anti-spam launch fee, charged by the Generator on EVERY launch
+// (both modes), on top of what the mode consumes. Absolute wei, not bps.
+// Owner-tunable via setLaunchFee (MAX_LAUNCH_FEE = 1 BNB sanity cap).
+uint256 public launchFeeBnb;    // 0.005 ether at deploy
 
 // Volume Tracking
 mapping(address => mapping(address => uint256)) public userVolume;  // token => user => volume
@@ -229,6 +234,7 @@ event TokenRegistered(address indexed token, address indexed creator, address ta
 event MasterCopyUpdated(string indexed copyType, address indexed newCopy);
 event ModuleMasterCopySet(uint8 indexed moduleType, address indexed masterCopy);
 event PlatformFeeUpdated(uint256 oldFee, uint256 newFee);
+event LaunchFeeUpdated(uint256 oldFee, uint256 newFee);
 event VolumeRegistered(address indexed token, address indexed user, uint256 amount);
 event GeneratorUpdated(address indexed oldGenerator, address indexed newGenerator);
 event RouterUpdated(address indexed oldRouter, address indexed newRouter);
@@ -897,8 +903,12 @@ The simplest mode. Creator supplies both the tokens and the BNB to form the init
 Flow:
 1. Creator calls Generator.generateProject() with launchMode = BYOL
 2. Generator creates Token + TaxHandler
-3. Creator sends BNB (as msg.value) + token supply is minted to Generator
-4. 1% platform fee taken from BNB → FeeReceiver
+3. Creator sends BNB (as msg.value = LP seed + flat launch fee) + token
+   supply is minted to Generator
+4. Flat anti-spam launch fee (Database.launchFeeBnb, 0.005 BNB at deploy,
+   owner-tunable, absolute wei) → FeeReceiver.receiveLaunchFee(token, creator).
+   NO percentage skim — the creator is supplying their own liquidity, so
+   ALL remaining BNB seeds the pool.
 5. Generator seeds the V4 pool via Router.addLiquidityETH → LiquidityVault
 6. Vault lazily initializes the pool at the implied price and mints
    full-range liquidity (tokens + remaining BNB)
@@ -932,6 +942,9 @@ Storage:
 
 Flow:
 1. Creator calls Generator with launchMode = FLAT_CURVE
+   - msg.value must equal the flat launch fee exactly (Database.launchFeeBnb,
+     anti-spam, → FeeReceiver.receiveLaunchFee) — raise BNB comes from
+     contributors, not the creator
    - Creator configures liquidityBps/creatorBps split (most should go to liquidity)
 2. Generator creates Token + TaxHandler + FlatCurve clone
 3. Token supply minted to FlatCurve contract
@@ -974,7 +987,12 @@ event PlatformFeeTaken(uint256 amount);
 
 ## 9. FEE RECEIVER CONTRACT
 
-Single contract that collects all platform 1% fees. Simple for now, can be extended later.
+Single contract that collects all platform 1% fees. It exposes **typed,
+context-carrying receive functions** so that the (frozen) hook forwards full
+trade context on every swap — a future FeeReceiver implementation, swapped in
+via `Database.setFeeReceiver`, can act on trades on-chain (wager tracking,
+revenue splitting, buyback, ...) without any hook change. The current
+implementation just accrues.
 
 ### Storage
 ```
@@ -988,33 +1006,36 @@ mapping(address => uint256) public feesByToken;  // per-token fee accumulation
 
 ### Functions
 ```solidity
-// Called by Router on trades, by FlatCurve on contributions
-receive() external payable {
-    totalReceived += msg.value;
-    emit FeeReceived(msg.sender, msg.value);
-}
+// Untagged BNB (fallback for simple sends)
+receive() external payable;
 
-// Tagged fee receipt for analytics
-function receiveFee(address token) external payable {
-    totalReceived += msg.value;
-    feesByToken[token] += msg.value;
-    emit FeeReceived(msg.sender, msg.value);
-    emit TokenFeeReceived(token, msg.value);
-}
+// Generic tagged receipt — kept for future callers with no trade/launch context
+function receiveFee(address token) external payable;
 
-// Withdraw accumulated fees
-function withdraw() external {
-    require(msg.sender == owner);
-    uint256 balance = address(this).balance;
-    TransferHelper.safeTransferETH(recipient, balance);
-    emit FeesWithdrawn(recipient, balance);
-}
+// Trade-like flow: LumoriaHook swaps (buys + sells, any router) and FlatCurve
+// raise contributions. `user` is address(0) for third-party-router swaps
+// (no hookData). `tradeAmount` is gross BNB: bnbIn on buys/contributions,
+// bnbOutGross on sells.
+function receiveTradeFee(address token, address user, uint256 tradeAmount, bool isBuy) external payable;
+
+// Project launches (Generator, both modes — flat anti-spam fee);
+// `user` is the creator.
+function receiveLaunchFee(address token, address user) external payable;
+
+// Withdraw accumulated fees (owner → recipient)
+function withdraw() external;
 ```
+
+All receive paths accrue `totalReceived` + `feesByToken[token]` and emit
+`FeeReceived` (the single non-double-counting revenue event), plus their typed
+context event.
 
 ### Events
 ```
-event FeeReceived(address indexed from, uint256 amount);
-event TokenFeeReceived(address indexed token, uint256 amount);
+event FeeReceived(address indexed from, uint256 amount);   // EVERY inflow — total revenue source
+event TokenFeeReceived(address indexed token, uint256 amount);              // generic receiveFee only
+event TradeFeeReceived(address indexed token, address indexed user, uint256 fee, uint256 tradeAmount, bool isBuy);
+event LaunchFeeReceived(address indexed token, address indexed user, uint256 fee);
 event FeesWithdrawn(address indexed recipient, uint256 amount);
 event RecipientUpdated(address indexed oldRecipient, address indexed newRecipient);
 ```
@@ -1139,12 +1160,21 @@ function generateProject(
     // 6. Register in database
     database.registerToken(token, msg.sender, taxHandler);
     
-    // 7. Execute launch mode. Creator allocations (immediate or vested) are
+    // 7. Flat anti-spam launch fee — every launch mode, on top of whatever
+    //    BNB the mode consumes. Forwarded with creator context.
+    uint256 launchFee = database.launchFeeBnb();
+    require(msg.value >= launchFee, "Gen: insufficient launch fee");
+    if (launchFee > 0) {
+        IFeeReceiver(database.feeReceiver()).receiveLaunchFee{value: launchFee}(token, msg.sender);
+    }
+    
+    // 8. Execute launch mode. Creator allocations (immediate or vested) are
     //    carved from the creator's remainder inside each launch path, before
     //    the creator receives what's left.
     if (launchMode == LaunchMode.BYOL) {
-        _launchBYOL(token, launchPayload, allocations);
+        _launchBYOL(token, launchPayload, allocations, msg.value - launchFee);
     } else if (launchMode == LaunchMode.FLAT_CURVE) {
+        require(msg.value == launchFee, "Gen: no BNB on FLAT_CURVE");
         _launchFlatCurve(token, launchPayload, allocations);
     }
     
@@ -1185,9 +1215,10 @@ event TokensReleased(uint256 indexed id, address indexed beneficiary, uint256 am
 
 ### BYOL Launch
 ```solidity
-function _launchBYOL(address token, bytes calldata payload) internal {
+function _launchBYOL(address token, bytes calldata payload, AllocationData[] calldata allocations, uint256 forLP) internal {
     // payload encodes: (uint256 tokensForLP)
-    // msg.value = BNB for LP (1% platform fee skimmed first)
+    // forLP = msg.value net of the flat launch fee — ALL of it seeds the
+    // pool (no percentage skim; the creator supplies their own liquidity)
     
     // Seed the V4 pool via Router → LiquidityVault. The vault lazily
     // initializes the pool at the implied price and the liquidity is
@@ -1284,8 +1315,10 @@ event AllocationVested(address indexed token, address indexed beneficiary, uint2
 - `ModifyLiquidity(id, sender, tickLower, tickUpper, liquidityDelta, salt)`
 
 **FeeReceiver**:
-- `FeeReceived(from, amount)`
-- `TokenFeeReceived(token, amount)`
+- `FeeReceived(from, amount)` — every inflow; the revenue total
+- `TradeFeeReceived(token, user, fee, tradeAmount, isBuy)` — hook swaps + FlatCurve contributions
+- `LaunchFeeReceived(token, user, fee)` — every Generator launch (both modes; flat anti-spam fee)
+- `TokenFeeReceived(token, amount)` — generic `receiveFee` only
 - `FeesWithdrawn(recipient, amount)`
 
 **TaxHandler**:

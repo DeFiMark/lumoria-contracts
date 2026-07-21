@@ -144,7 +144,7 @@ Operators are **platform-wide**, not part of any init payload: `database.setOper
 | Contract | Unit | Integration | Notes |
 |---|---|---|---|
 | `Database.sol` | ✅ | ✅ | admin (incl. poolManager/hook/vault setters), registry, hook-gated volume (zero-user skip), master copies |
-| `FeeReceiver.sol` | ✅ | — | receive / receiveFee / withdraw / setRecipient |
+| `FeeReceiver.sol` | ✅ | — | receive / receiveFee / receiveTradeFee / receiveLaunchFee / withdraw / setRecipient |
 | `LumoriaToken.sol` | ✅ | ✅ | init, transfer, approve/transferFrom, burn, setShare forwarding, **pair-exclusion** (pair = PoolManager) |
 | `TaxHandler.sol` | ✅ | ✅ | init, fee timelock (**incl. §7.6 pending-disarm regression + §7.7 per-change increase cap**), batch module proposals, distribution math, setShare, **renounceManagement freeze (B6)**, **share-exclusion set (V2 §7.3)**, **dust sweep skips 0-bps modules (V2 §7.5)** |
 | `CreatorFeeModule.sol` | ✅ | ✅ | init (taxHandler from msg.sender), **accrue-and-pull `receiveTax`/`withdraw` (V2 §7.2)**, recipient rotation keeps old accrual claimable, **regression: contract recipient with no `receive()` cannot brick trading** |
@@ -171,7 +171,7 @@ Operators are **platform-wide**, not part of any init payload: `database.setOper
 
 ### Blocked — add tests once unblocked
 
-None currently. All Phase 1-5 contracts — plus the Phase-6 vesting/allocations/renounce work (incl. the rebate renounce-freeze), the Tokenomics-V2 Phase-A substrate changes, and the entire Phase B (MilestoneRewardModule, randomness provider, PrizePool, operator settlement loop) — are under test (**285 tests green**).
+None currently. All Phase 1-5 contracts — plus the Phase-6 vesting/allocations/renounce work (incl. the rebate renounce-freeze), the Tokenomics-V2 Phase-A substrate changes, the entire Phase B (MilestoneRewardModule, randomness provider, PrizePool, operator settlement loop), the typed FeeReceiver interface (`receiveTradeFee`/`receiveLaunchFee` with hook/FlatCurve/Generator context), and the flat launch fee (`Database.launchFeeBnb` + both launch modes) — are under test (**298 tests green**).
 
 ---
 

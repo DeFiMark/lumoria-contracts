@@ -3,6 +3,7 @@ import {
   TokenRegistered,
   VolumeRegistered,
   PlatformFeeUpdated,
+  LaunchFeeUpdated,
 } from "../generated/Database/Database";
 import { TaxHandler } from "../generated/Database/TaxHandler";
 import { LumoriaToken as LumoriaTokenContract } from "../generated/Database/LumoriaToken";
@@ -271,5 +272,11 @@ export function handleVolumeRegistered(event: VolumeRegistered): void {
 export function handlePlatformFeeUpdated(event: PlatformFeeUpdated): void {
   let pc = getOrCreatePlatformConfig();
   pc.platformFeeBps = event.params.newFee;
+  pc.save();
+}
+
+export function handleLaunchFeeUpdated(event: LaunchFeeUpdated): void {
+  let pc = getOrCreatePlatformConfig();
+  pc.launchFeeBnb = event.params.newFee;
   pc.save();
 }

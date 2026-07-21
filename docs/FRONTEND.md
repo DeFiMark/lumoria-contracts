@@ -80,6 +80,7 @@ Central registry. Cheap to read; rarely changes.
 - `tokenTaxHandler(token)` → address of the per-token TaxHandler.
 - `allTokensLength()` + `allTokens(i)` → on-chain iteration. For listing, prefer the subgraph.
 - `platformFeeBps()` → current platform fee (100 = 1%).
+- `launchFeeBnb()` → flat anti-spam launch fee in wei (0.005 BNB at deploy, owner-tunable, ≤ 1 BNB). **The launch wizard must read this live** and add it to `msg.value` on every `generateProject` call (both modes).
 - `generator()`, `router()`, `poolManager()`, `hook()`, `liquidityVault()`, `vestingVault()`, `wbnb()`, `feeReceiver()`, `rebateContract()` → infrastructure addresses. Cache aggressively; these change rarely. (`wbnb` is only the legacy path marker — pools are native-BNB.)
 - `userVolume(token, user)`, `tokenVolume(token)` → lifetime volume counters. Prefer the subgraph for recent / windowed volume. Note: `userVolume` only accrues for swaps routed with hookData attribution (our router); `tokenVolume` counts everything.
 
@@ -143,7 +144,9 @@ Single collector for platform 1% BNB fees. Owner-managed.
 - `recipient()` → current withdraw destination.
 
 **Key writes:**
-- `receiveFee(token)` payable — called by Router/FlatCurve/Generator with a token tag.
+- `receiveTradeFee(token, user, tradeAmount, isBuy)` payable — called by the **hook** on every swap (buys + sells, any router; `user = address(0)` without hookData) and by **FlatCurve** on contributions (`isBuy = true`, gross contribution as `tradeAmount`).
+- `receiveLaunchFee(token, user)` payable — called by the **Generator** on every launch, both modes (`user` = creator; flat anti-spam fee).
+- `receiveFee(token)` payable — generic tagged inflow, kept for future callers.
 - `receive()` payable — untagged fallback.
 - `withdraw()` — owner only.
 - `setRecipient(newRecipient)` — owner only.
@@ -151,8 +154,10 @@ Single collector for platform 1% BNB fees. Owner-managed.
 **Events to index:**
 | Event | Fires when | Subgraph use |
 |---|---|---|
-| `FeeReceived(from, amount)` | Any BNB-in (tagged or untagged) | Platform revenue stream |
-| `TokenFeeReceived(token, amount)` | Tagged sends only — attributes fees to tokens | Per-token platform revenue |
+| `FeeReceived(from, amount)` | EVERY BNB-in (all paths) | Platform revenue stream (single non-double-counting source) |
+| `TradeFeeReceived(token, user, fee, tradeAmount, isBuy)` | Hook swaps + FlatCurve contributions | Per-user / per-token trade-fee context |
+| `LaunchFeeReceived(token, user, fee)` | Every launch (both modes) | Launch-fee context |
+| `TokenFeeReceived(token, amount)` | Generic `receiveFee` only | Per-token platform revenue (legacy shape) |
 | `FeesWithdrawn(recipient, amount)` | Owner withdraws | Audit trail |
 | `RecipientUpdated(old, new)` | Owner rotates recipient | Audit trail |
 
@@ -498,14 +503,14 @@ Single-transaction project launch. Clones Token + TaxHandler + optional FlatCurv
 **Launch modes and their payloads:**
 | Mode | Enum | Payload | msg.value |
 |---|---|---|---|
-| `BYOL` | 0 | `abi.encode(uint256 tokensForLP)` | required — becomes the BNB side of initial LP (after 1% platform fee) |
+| `BYOL` | 0 | `abi.encode(uint256 tokensForLP)` | required — `msg.value = launchFeeBnb + BNB for LP`; ALL BNB after the flat launch fee seeds the pool (no percentage skim) |
 | `FLAT_CURVE` | 1 | `abi.encode(hardCap, minContribution, maxContribution, tokensForPresale, tokensForLP, liquidityBps, creatorBps, startTime, endTime)` | must be 0 |
 
 **Events:**
 | Event | Fires when | Subgraph use |
 |---|---|---|
 | `ProjectGenerated(token, taxHandler, creator, name, symbol, buyFee, sellFee, launchMode)` | Every launch | Primary token-creation event; creates the `Token` entity and links to creator |
-| `BYOLLaunched(token, platformFee, tokensForLP, bnbForLP)` | BYOL branch | LP-seeding record: what went to fees vs. the pool |
+| `BYOLLaunched(token, tokensForLP, bnbForLP)` | BYOL branch | LP-seeding record (launch-fee context comes from `FeeReceiver.LaunchFeeReceived`) |
 | `FlatCurveLaunched(token, flatCurve, hardCap)` | FLAT_CURVE branch | Links the token to its raise contract; seed a `Raise` entity |
 | `AllocationMinted(token, beneficiary, amount)` | An `allocations` entry with `duration == 0` | Immediate (unlocked) allocation → a `TokenAllocation` row (locked=false) |
 | `AllocationVested(token, beneficiary, scheduleId, amount, cliff, duration)` | An `allocations` entry with `duration > 0` | Links to the VestingVault `VestingSchedule` (by `scheduleId`); drives the Portfolio vested-tokens UI |
@@ -516,7 +521,7 @@ Single-transaction project launch. Clones Token + TaxHandler + optional FlatCurv
   2. Picks launch mode; mode-specific form opens.
   3. Client generates a random `salt`, calls `predictTokenAddress(salt)` to preview the future token address.
   4. Builds the launch payload via `abi.encode` (helpers in `test/fixtures/deploy.js` mirror what the UI should do).
-  5. Submits `generateProject` — for BYOL, with BNB attached; for FLAT_CURVE, with value 0.
+  5. Submits `generateProject` — `msg.value` MUST include the flat launch fee (`Database.launchFeeBnb()`, read live): BYOL sends `launchFee + LP BNB`; FLAT_CURVE sends exactly `launchFee`.
 - **Post-launch confirmation**: show `ProjectGenerated` + launch-mode event, link to the token page (and FlatCurve page if applicable).
 
 **⚠️ Salt management**: `salt` must be unique per launch (CREATE2 reuses would fail). Recommend the UI derive salt from `keccak256(creator ++ block.timestamp ++ random)` client-side. Users who want a vanity address can grind the salt offline and submit.

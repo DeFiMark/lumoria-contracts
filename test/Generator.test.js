@@ -13,6 +13,9 @@ const {
 
 const TOTAL_SUPPLY = ethers.parseEther("1000000000");
 const DEAD = "0x000000000000000000000000000000000000dEaD";
+// Flat anti-spam launch fee (Database default). Charged on every
+// generateProject call, on top of the BNB the launch mode consumes.
+const LAUNCH_FEE = ethers.parseEther("0.005");
 
 // Build a single-CreatorFee module config (doesn't need taxHandler in the payload
 // any more — module infers from msg.sender at init time).
@@ -76,16 +79,19 @@ describe("Generator", function () {
     });
 
     describe("BYOL launch", function () {
-        it("1% platform fee → FeeReceiver, creator gets remaining tokens, LP to dEaD", async function () {
+        it("flat launch fee → FeeReceiver, ALL remaining BNB seeds LP, creator gets remaining tokens", async function () {
             const base = await loadFixture(deployBase);
             await useRealGenerator(base);
             const { creator } = base.signers;
 
             const feeBefore = await base.feeReceiver.totalReceived();
+            const pmBnbBefore = await ethers.provider.getBalance(await base.poolManager.getAddress());
 
             const tokensForLP = ethers.parseEther("600000000"); // 60% of supply → LP
+            const bnbForLP = ethers.parseEther("5");
             const salt = randomSalt();
-            await base.generator.connect(creator).generateProject(
+            const predicted = await base.generator.predictTokenAddress(salt);
+            await expect(base.generator.connect(creator).generateProject(
                 "BYOL", "BYO",
                 500, 500,
                 singleCreatorFeeModule(creator.address),
@@ -93,15 +99,21 @@ describe("Generator", function () {
                 encodeBYOLPayload(tokensForLP),
                 [],
                 salt,
-                { value: ethers.parseEther("5") },
-            );
+                { value: bnbForLP + LAUNCH_FEE },
+            )).to.emit(base.feeReceiver, "LaunchFeeReceived")
+                .withArgs(predicted, creator.address, LAUNCH_FEE);
 
-            // Platform fee: 1% of 5 BNB = 0.05 BNB
+            // Flat fee only — no percentage skim on the creator's liquidity.
             const feeAfter = await base.feeReceiver.totalReceived();
-            expect(feeAfter - feeBefore).to.equal(ethers.parseEther("0.05"));
+            expect(feeAfter - feeBefore).to.equal(LAUNCH_FEE);
+
+            // The FULL 5 BNB seeds the pool (minus a few wei of position-math
+            // dust the vault refunds — no percentage skim).
+            expect(
+                (await ethers.provider.getBalance(await base.poolManager.getAddress())) - pmBnbBefore,
+            ).to.be.closeTo(bnbForLP, 1_000_000_000n); // 1 gwei dust tolerance
 
             // Creator received (TOTAL_SUPPLY - tokensForLP)
-            const predicted = await base.generator.predictTokenAddress(salt);
             const token = await ethers.getContractAt("LumoriaToken", predicted);
             const expectedCreatorTokens = TOTAL_SUPPLY - tokensForLP;
             expect(await token.balanceOf(creator.address)).to.equal(expectedCreatorTokens);
@@ -118,7 +130,7 @@ describe("Generator", function () {
             ).to.be.gt(0);
         });
 
-        it("rejects zero BNB", async function () {
+        it("rejects msg.value below the launch fee", async function () {
             const base = await loadFixture(deployBase);
             await useRealGenerator(base);
             await expect(
@@ -131,7 +143,47 @@ describe("Generator", function () {
                     randomSalt(),
                     { value: 0 },
                 ),
+            ).to.be.revertedWith("Gen: insufficient launch fee");
+        });
+
+        it("rejects zero LP BNB (msg.value covers only the launch fee)", async function () {
+            const base = await loadFixture(deployBase);
+            await useRealGenerator(base);
+            await expect(
+                base.generator.connect(base.signers.creator).generateProject(
+                    "X", "X", 0, 0,
+                    singleCreatorFeeModule(base.signers.creator.address),
+                    LAUNCH_MODE.BYOL,
+                    encodeBYOLPayload(TOTAL_SUPPLY),
+                    [],
+                    randomSalt(),
+                    { value: LAUNCH_FEE },
+                ),
             ).to.be.revertedWith("Gen: zero BNB");
+        });
+
+        it("launch fee is tunable: after setLaunchFee(0), the full msg.value seeds LP", async function () {
+            const base = await loadFixture(deployBase);
+            await useRealGenerator(base);
+            const { creator } = base.signers;
+            await base.database.setLaunchFee(0);
+
+            const feeBefore = await base.feeReceiver.totalReceived();
+            const pmBnbBefore = await ethers.provider.getBalance(await base.poolManager.getAddress());
+            await base.generator.connect(creator).generateProject(
+                "Free", "FRE", 0, 0,
+                singleCreatorFeeModule(creator.address),
+                LAUNCH_MODE.BYOL,
+                encodeBYOLPayload(TOTAL_SUPPLY),
+                [],
+                randomSalt(),
+                { value: ethers.parseEther("1") },
+            );
+
+            expect(await base.feeReceiver.totalReceived()).to.equal(feeBefore);
+            expect(
+                (await ethers.provider.getBalance(await base.poolManager.getAddress())) - pmBnbBefore,
+            ).to.be.closeTo(ethers.parseEther("1"), 1_000_000_000n); // 1 gwei dust tolerance
         });
 
         it("rejects tokensForLP = 0", async function () {
@@ -205,6 +257,7 @@ describe("Generator", function () {
                 payload,
                 [],
                 salt,
+                { value: LAUNCH_FEE }, // flat anti-spam fee, both launch modes
             );
             const receipt = await tx.wait();
 
@@ -223,6 +276,46 @@ describe("Generator", function () {
 
             return { token, tokenAddr, flatCurve };
         }
+
+        it("charges the flat launch fee (anti-spam) with creator context", async function () {
+            const base = await loadFixture(deployBase);
+            await useRealGenerator(base);
+            const { creator } = base.signers;
+
+            const feeBefore = await base.feeReceiver.totalReceived();
+            const { tokenAddr } = await launchWithFlatCurve(base);
+
+            expect((await base.feeReceiver.totalReceived()) - feeBefore).to.equal(LAUNCH_FEE);
+            expect(await base.feeReceiver.feesByToken(tokenAddr)).to.equal(LAUNCH_FEE);
+        });
+
+        it("rejects a FLAT_CURVE launch without the launch fee", async function () {
+            const base = await loadFixture(deployBase);
+            await useRealGenerator(base);
+            const { creator } = base.signers;
+            const now = Math.floor((await ethers.provider.getBlock("latest")).timestamp);
+            const payload = encodeFlatCurvePayload({
+                hardCap: ethers.parseEther("10"),
+                minContribution: ethers.parseEther("0.1"),
+                maxContribution: ethers.parseEther("5"),
+                tokensForPresale: ethers.parseEther("400000000"),
+                tokensForLP: ethers.parseEther("500000000"),
+                liquidityBps: 8000,
+                creatorBps: 2000,
+                startTime: now + 1,
+                endTime: now + 3600,
+            });
+            await expect(
+                base.generator.connect(creator).generateProject(
+                    "X", "X", 0, 0,
+                    singleCreatorFeeModule(creator.address),
+                    LAUNCH_MODE.FLAT_CURVE,
+                    payload,
+                    [],
+                    randomSalt(),
+                ),
+            ).to.be.revertedWith("Gen: insufficient launch fee");
+        });
 
         it("clones a FlatCurve, transfers tokens, creator gets remainder", async function () {
             const base = await loadFixture(deployBase);
@@ -477,6 +570,7 @@ describe("Generator", function () {
                 payload,
                 [alloc(user1.address, amount)],
                 salt,
+                { value: LAUNCH_FEE },
             );
 
             const tokenAddr = await base.generator.predictTokenAddress(salt);

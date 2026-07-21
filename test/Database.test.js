@@ -64,6 +64,38 @@ describe("Database", function () {
         });
     });
 
+    describe("admin: launch fee", function () {
+        it("defaults launchFeeBnb to 0.005 BNB", async function () {
+            const { database } = await loadFixture(deployBase);
+            expect(await database.launchFeeBnb()).to.equal(ethers.parseEther("0.005"));
+        });
+
+        it("only owner can update the launch fee", async function () {
+            const { database, signers } = await loadFixture(deployBase);
+            await expect(
+                database.connect(signers.user1).setLaunchFee(ethers.parseEther("0.01")),
+            ).to.be.reverted;
+        });
+
+        it("rejects a fee above MAX_LAUNCH_FEE (1 BNB)", async function () {
+            const { database } = await loadFixture(deployBase);
+            await expect(
+                database.setLaunchFee(ethers.parseEther("1") + 1n),
+            ).to.be.revertedWith("Exceeds max");
+        });
+
+        it("updates the fee (including to 0) and emits old → new", async function () {
+            const { database } = await loadFixture(deployBase);
+            await expect(database.setLaunchFee(ethers.parseEther("0.02")))
+                .to.emit(database, "LaunchFeeUpdated")
+                .withArgs(ethers.parseEther("0.005"), ethers.parseEther("0.02"));
+            expect(await database.launchFeeBnb()).to.equal(ethers.parseEther("0.02"));
+
+            await database.setLaunchFee(0);
+            expect(await database.launchFeeBnb()).to.equal(0);
+        });
+    });
+
     describe("registerToken", function () {
         it("only generator can register", async function () {
             const { database, signers } = await loadFixture(deployBase);

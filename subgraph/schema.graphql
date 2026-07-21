@@ -405,6 +405,10 @@ type TokenMinuteData @entity {
 type PlatformConfig @entity {
   id: ID! # "1"
   platformFeeBps: BigInt!
+  # Flat anti-spam launch fee (wei). Like platformFeeBps, populated on the
+  # first *Updated event — read Database.launchFeeBnb() live for the
+  # pre-first-update value (0.005 BNB at deploy).
+  launchFeeBnb: BigInt!
   totalFeesReceivedBnb: BigInt!
   totalTokens: Int!
   totalVolumeBnb: BigInt!

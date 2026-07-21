@@ -127,6 +127,7 @@ Signatures are exact (indexed fields marked). "Emitter" is the concrete contract
 | `TokenRegistered` | `(address indexed token, address indexed creator, address taxHandler)` | every launch (in `generateProject`) | **Bootstrap**: create `Token`, `LumoriaToken` + `TaxHandler` templates, hydrate fees+modules via calls (§3) |
 | `VolumeRegistered` | `(address indexed token, address indexed user, uint256 amount)` | hook records a trade | add to `Token.totalVolume` always; add to `UserVolume`/daily only if `user != 0x0` |
 | `PlatformFeeUpdated` | `(uint256 oldFee, uint256 newFee)` | owner changes platform fee | update `PlatformConfig` |
+| `LaunchFeeUpdated` | `(uint256 oldFee, uint256 newFee)` | owner changes the flat launch fee | update `PlatformConfig.launchFeeBnb` |
 | `ModuleMasterCopySet` | `(uint8 indexed moduleType, address indexed masterCopy)` | admin registers a module impl | `ModuleType` registry (rare) |
 | `MasterCopyUpdated` | `(string indexed copyType, address indexed newCopy)` | admin upgrades a master copy | audit trail. ⚠️ `string indexed` → topic is the **keccak hash** of the string, not readable; capture the hash |
 | `GeneratorUpdated` / `RouterUpdated` / `PoolManagerUpdated` / `HookUpdated` / `LiquidityVaultUpdated` / `FeeReceiverUpdated` / `RebateContractUpdated` | `(address indexed old, address indexed new)` | admin rewires infra | `InfraChange` audit entries |
@@ -136,7 +137,7 @@ Signatures are exact (indexed fields marked). "Emitter" is the concrete contract
 | Event | Signature | Fires when | Handler |
 |---|---|---|---|
 | `ProjectGenerated` | `(address indexed token, address indexed taxHandler, address indexed creator, string name, string symbol, uint256 buyFee, uint256 sellFee, uint8 launchMode)` | end of every launch | fill `Token` metadata (name/symbol/launchMode); good bootstrap point (see §3) |
-| `BYOLLaunched` | `(address indexed token, uint256 platformFee, uint256 tokensForLP, uint256 bnbForLP)` | BYOL branch | record LP-seed split on `Token` |
+| `BYOLLaunched` | `(address indexed token, uint256 tokensForLP, uint256 bnbForLP)` | BYOL branch | record LP seed on `Token` (the flat launch fee is on `FeeReceiver.LaunchFeeReceived`) |
 | `FlatCurveLaunched` | `(address indexed token, address indexed flatCurve, uint256 hardCap)` | FLAT_CURVE branch | create `Raise`, spawn `FlatCurve` template |
 | `AllocationMinted` | `(address indexed token, address indexed beneficiary, uint256 amount)` | an `allocations` entry with `duration == 0` | create a `TokenAllocation` (locked=false) → token + beneficiary |
 | `AllocationVested` | `(address indexed token, address indexed beneficiary, uint256 indexed scheduleId, uint256 amount, uint64 cliff, uint64 duration)` | an `allocations` entry with `duration > 0` | create a `TokenAllocation` (locked=true) and link to the `VestingSchedule` with `id = scheduleId` (same tx as the VestingVault `ScheduleCreated` — §5.11) |
@@ -166,8 +167,10 @@ There is **no removal event** — liquidity is permanent by construction. TVL on
 
 | Event | Signature | Fires when | Handler |
 |---|---|---|---|
-| `FeeReceived` | `(address indexed from, uint256 amount)` | any BNB in (tagged or not) | total platform revenue |
-| `TokenFeeReceived` | `(address indexed token, uint256 amount)` | tagged sends (the hook tags with the token) | per-token platform revenue |
+| `FeeReceived` | `(address indexed from, uint256 amount)` | EVERY BNB in (all receive paths + fallback) | total platform revenue — the single non-double-counting source |
+| `TradeFeeReceived` | `(address indexed token, address indexed user, uint256 fee, uint256 tradeAmount, bool isBuy)` | hook swaps (any router; `user=0x0` without hookData) + FlatCurve contributions | per-user/per-token trade-fee context (subset of `FeeReceived` — don't also sum it into revenue) |
+| `LaunchFeeReceived` | `(address indexed token, address indexed user, uint256 fee)` | Generator BYOL launches | launch-fee context (subset of `FeeReceived`) |
+| `TokenFeeReceived` | `(address indexed token, uint256 amount)` | generic `receiveFee` only (no current callers) | per-token platform revenue (legacy shape) |
 | `FeesWithdrawn` | `(address indexed recipient, uint256 amount)` | owner withdraws | audit |
 | `RecipientUpdated` | `(address indexed oldRecipient, address indexed newRecipient)` | owner rotates recipient | audit |
 
@@ -592,6 +595,7 @@ type TokenMinuteData @entity {    # A3 — 5-min candles for the 5m/15m chart ti
 type PlatformConfig @entity {     # singleton id="1"
     id: ID!
     platformFeeBps: BigInt!
+    launchFeeBnb: BigInt!          # flat anti-spam launch fee (wei); from LaunchFeeUpdated
     totalFeesReceivedBnb: BigInt!
     totalTokens: Int!
     totalVolumeBnb: BigInt!        # A1 — platform-wide cumulative trade volume (sum of VolumeRegistered)
@@ -640,7 +644,7 @@ PlatformConfig (singleton)
 - **24h / windowed volume, "top tokens"** → aggregate `Trade` (or daily snapshots). `Token.totalVolumeBnb` counts all routes; `attributedVolumeBnb` only Lumoria-router trades.
 - **TVL / "liquidity locked"** → cumulative from vault `LiquidityLocked.totalLocked` (only grows).
 - **Lifetime burns / rewards / auto-LP** → accumulate module events.
-- **Platform revenue** → `FeeReceiver.FeeReceived` (total) + `TokenFeeReceived` (per token).
+- **Platform revenue** → `FeeReceiver.FeeReceived` (total; fires on every inflow). Per-token/per-user context is available from `TradeFeeReceived` / `LaunchFeeReceived` if wanted — they are subsets of `FeeReceived`, never additive to it.
 - **Creator dashboard** → `FeeChange` + `ModuleEvent` + live `PendingChange`; `Token.renounced` is terminal (no more changes once true).
 - **Platform volume + 7d delta (A1)** → maintain `PlatformConfig.totalVolumeBnb` and a `PlatformDayData` bucket from `Database.VolumeRegistered` (and `FeeReceiver` for `feesBnb`).
 - **Active builders (A2)** → `PlatformConfig.creatorCount`, incremented on the *first* `TokenRegistered` for each distinct creator.
@@ -656,11 +660,12 @@ PlatformConfig (singleton)
 ```yaml
 dataSources:
   - Database        # events: TokenRegistered, VolumeRegistered, PlatformFeeUpdated,
-                    #         ModuleMasterCopySet, *Updated(infra), MasterCopyUpdated
+                    #         LaunchFeeUpdated, ModuleMasterCopySet, *Updated(infra), MasterCopyUpdated
   - Generator       # ProjectGenerated, BYOLLaunched, FlatCurveLaunched
   - LumoriaHook     # TokenPurchased, TokenSold, LumoriaPoolInitialized
   - LumoriaLiquidityVault   # PoolInitialized, LiquidityLocked
-  - FeeReceiver     # FeeReceived, TokenFeeReceived, FeesWithdrawn, RecipientUpdated
+  - FeeReceiver     # FeeReceived (indexed — revenue total), TradeFeeReceived,
+                    #   LaunchFeeReceived, TokenFeeReceived, FeesWithdrawn, RecipientUpdated
   - RebateContract  # RebateFunded, RebateToppedUp, RebateCredited, RebateBpsUpdated,
                     #            RebateWithdrawn, RebateDeactivated, CreditorUpdated
   - VestingVault    # ScheduleCreated, TokensReleased

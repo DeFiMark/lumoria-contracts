@@ -13,6 +13,8 @@ const {
 
 const TOTAL_SUPPLY = ethers.parseEther("1000000000");
 const DEAD = "0x000000000000000000000000000000000000dEaD";
+// Flat anti-spam launch fee (Database default) — required on every launch.
+const LAUNCH_FEE = ethers.parseEther("0.005");
 
 function randomSalt() {
     return ethers.hexlify(ethers.randomBytes(32));
@@ -53,6 +55,7 @@ async function launchFlatCurve(base, overrides = {}) {
         payload,
         [],
         salt,
+        { value: LAUNCH_FEE }, // flat anti-spam launch fee
     );
     const receipt = await tx.wait();
 
@@ -128,12 +131,22 @@ describe("FlatCurve", function () {
             await time.increase(2);
             const feeBefore = await base.feeReceiver.totalReceived();
 
-            await flatCurve.connect(base.signers.user1).contribute({ value: ethers.parseEther("1") });
+            // Contributions are trade-like: contributor context + gross size.
+            await expect(
+                flatCurve.connect(base.signers.user1).contribute({ value: ethers.parseEther("1") })
+            ).to.emit(base.feeReceiver, "TradeFeeReceived")
+                .withArgs(
+                    tokenAddr, base.signers.user1.address,
+                    ethers.parseEther("0.01"), ethers.parseEther("1"), true,
+                );
 
             // 1% fee = 0.01 BNB
             const feeAfter = await base.feeReceiver.totalReceived();
             expect(feeAfter - feeBefore).to.equal(ethers.parseEther("0.01"));
-            expect(await base.feeReceiver.feesByToken(tokenAddr)).to.equal(ethers.parseEther("0.01"));
+            // feesByToken carries the 0.005 flat launch fee + this contribution's 1%.
+            expect(await base.feeReceiver.feesByToken(tokenAddr)).to.equal(
+                ethers.parseEther("0.01") + LAUNCH_FEE,
+            );
 
             // User's net contribution = 0.99 BNB
             expect(await flatCurve.contributions(base.signers.user1.address)).to.equal(ethers.parseEther("0.99"));

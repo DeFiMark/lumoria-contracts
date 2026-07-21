@@ -11,7 +11,7 @@ Critical path (closed-beta-first):
   [✅ contracts + docs + tests]
         │
         ├─ ✅ frozen-layer doors closed (§1b)
-        ├─ ⬜ fork rehearsal (needs archive RPC)
+        ├─ ✅ fork rehearsal (ran 2026-07-20 — caught + fixed missing Phase-B wiring in deploy-base.js)
         ├─ ⬜ Slither / quick static pass
         │        │
         │        ▼
@@ -39,6 +39,8 @@ Critical path (closed-beta-first):
   - Also (§6.2): every module swap took `amountOutMin = 0` — a free sandwich, since these swaps spend the *module's* BNB and an arbitrary caller has no incentive to pick a good floor. `executeBurn` / `executeLiquidity` / `triggerDistribution` now require a non-zero slippage floor + deadline, and execution authority comes from a **platform-wide operator registry on the Database** (`isOperator` / `operatorCount` / `setOperator`, owner-only — token creators cannot appoint operators). While `operatorCount == 0` everything stays permissionless; once operators exist they execute first and anyone may execute after a 1h fallback, so an absent backend delays a burn but never strands funds. Only the three functions that *swap* are gated (§6.3) — `triggerDistribution` was split into the permanently-permissionless `processRewards()` and the gated `convertAndDistribute()`; claims, donations and share-sync are never gated. `RewardModule.receiveTax` lost its reentrancy guard (a guard there reverts whenever a module-initiated swap re-enters the tax path); self-rewarding tokens are rejected at init. **211 tests green.**
   - ⚠️ **Breaking ABI changes** for frontend/subgraph, catalogued in [`docs/FRONTEND_MIGRATION_V2.md`](./docs/FRONTEND_MIGRATION_V2.md) (nothing in the UI repo touched yet): `CreatorFeeModule.TaxForwarded` → `TaxAccrued` + `TaxWithdrawn` and fees must be pulled via `withdraw()`; module `execute*` signatures gained `minOut`/`deadline`; `RewardModule.triggerDistribution` was replaced by `processRewards()` + `convertAndDistribute()`. Module init payloads are **unchanged**.
   - ✅ **Frozen-layer doors all closed** — see §1b: fee-timelock bait-and-switch fixed, per-change fee-increase cap added, hook now emits pool price for OHLC. **217 tests green.**
+- [x] **Typed FeeReceiver interface (2026-07-20)** — closed the last frozen-layer door before deploy: the hook forwarded platform fees as `receiveFee(token)` with no trade context, and the hook can never be upgraded once pools exist. `IFeeReceiver` now has `receiveTradeFee(token, user, tradeAmount, isBuy)` (hook swaps — any router, `user=0x0` without hookData — and FlatCurve contributions) and `receiveLaunchFee(token, user)` (Generator BYOL). A future FeeReceiver swapped in via `Database.setFeeReceiver` receives full per-trade context on-chain (wager tracking etc.). Current implementation still just accrues; `FeeReceived` still fires on every inflow so the subgraph revenue handler is unchanged. ABI notes in `FRONTEND_MIGRATION_V2.md §3b`. **290 tests green.**
+- [x] **Flat launch fee (2026-07-20)** — replaced BYOL's 1% skim on the creator's LP seed with a **flat anti-spam fee** (`Database.launchFeeBnb`, 0.005 BNB at deploy, owner-settable via `setLaunchFee`, ≤ 1 BNB, can be 0) charged on **every** `generateProject` call: BYOL sends `launchFee + LP BNB` (ALL post-fee BNB seeds the pool), FLAT_CURVE sends exactly `launchFee` (raise creation now costs the fee too). FlatCurve *contributions* keep the 1% trade-like fee (→ `receiveTradeFee`). `BYOLLaunched` dropped its `platformFee` param. Wizard math in `FRONTEND_MIGRATION_V2.md §3a`; subgraph indexes `LaunchFeeUpdated` → `PlatformConfig.launchFeeBnb`. **298 tests green.**
 
 ## 1b. Frozen-Layer Decisions (✅ all closed)
 
@@ -58,14 +60,7 @@ Validates the deploy + a real launch/buy against the **actual canonical V4 PoolM
 
 - [x] `hardhat.config.js` — optional BSC fork on the `hardhat` network, gated by `BSC_FORK`, pinned `chainId: 56` (so deploy treats it as mainnet). Never forks during `npm test`.
 - [x] `deploy-base.js` — detects mainnet by **chainId 56** (not network name), so a fork uses the canonical PoolManager + WBNB marker + periphery.
-- [ ] 🚧 **Actually run it.** Blocked on an **archive-capable `BSC_RPC`** — public dataseeds (`bsc-dataseed.*`, `publicnode`) only serve `latest`-tag state and fail forking with `missing trie node` / `historical state not available`. Use your own BSC node or a paid archive provider (QuickNode / Alchemy / Chainstack / Ankr BSC-archive). Then:
-  ```bash
-  # .env: BSC_RPC=<archive endpoint>   (optionally BSC_FORK_BLOCK=<recent block> to pin)
-  BSC_FORK=1 npx hardhat node            # terminal 1 — persistent forked node
-  npm run deploy:local                   # terminal 2 — deploy onto the fork (uses canonical PM)
-  npm run smoke:local                    # launch a BYOL token + buy through the router on the fork
-  ```
-  Expect: deploy completes, `deployments/localhost.json` has `v4.poolManager = 0x28e2…e9df`, smoke launches + buys + registers volume against the real PoolManager.
+- [x] ✅ **Ran it (2026-07-20).** Alchemy BSC endpoint (`BSC_RPC`) confirmed archive-capable; forked at block 111169576 with `BSC_FORK=1 BSC_FORK_BLOCK=… npx hardhat node`, then `npm run deploy:local` + `npm run smoke:local`. Deploy used the **canonical PoolManager `0x28e2…e9df`**; smoke launched a BYOL token, seeded + vault-locked V4 liquidity, and bought 0.01 BNB through `LumoriaSwapRouter` with volume registered. **The rehearsal caught a real gap:** `deploy-base.js` predated Phase B and never deployed/wired `PrizePool` (type 4), `MilestoneRewardModule` (type 5), or `TrustedOperatorRandomness` (`Database.randomnessProvider`). Fixed in `deploy-base.js` + `verify.js` (artifact now includes `masterCopies.prizePool/.milestone` + `core.randomnessProvider`); re-ran deploy + smoke green with all six module types wired.
 
 ## 3. Security Audit + Closed-Beta Guardrails (⬜ — audit runs in PARALLEL with the beta; gates the PUBLIC launch)
 
@@ -103,7 +98,7 @@ Validates the deploy + a real launch/buy against the **actual canonical V4 PoolM
 
 ## 6. Mainnet Deploy (⬜ — for the closed beta; audit runs in parallel)
 
-- [ ] `.env`: `DEPLOYER_PK` (funded with enough BNB for ~14 deploys + hook mining), **`FEE_RECIPIENT` explicitly set**, `BSCSCAN_API_KEY`. Optionally `LUMORIA_OPERATORS` (comma-separated backend addresses) — unset ships module execution permissionless; see TOKENOMICS_V2 §6.2.
+- [ ] `.env`: `DEPLOYER_PK` (funded with enough BNB for ~17 deploys + hook mining), **`FEE_RECIPIENT` explicitly set**, `ETHERSCAN_API_KEY` (Etherscan V2 unified key — covers BscScan; the old per-chain BscScan keys are sunset). Optionally `LUMORIA_OPERATORS` (comma-separated backend addresses) — unset ships module execution permissionless; see TOKENOMICS_V2 §6.2. ✅ `BSC_RPC` already set (Alchemy, archive-capable).
 - [ ] `npm run deploy:bsc` → writes `deployments/bsc.json` (uses canonical PoolManager + periphery).
 - [ ] `npm run verify:bsc` — verify all contracts on BscScan (note: PoolManager verify is best-effort; it's canonical/pre-verified on mainnet, the script try/catches it).
 - [ ] `npm run smoke:bsc`-equivalent / a guarded first real launch — confirm launch + buy + volume on mainnet.
