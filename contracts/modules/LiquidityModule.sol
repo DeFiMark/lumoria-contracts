@@ -42,6 +42,7 @@ pragma solidity 0.8.28;
 import "../interfaces/IModule.sol";
 import "../interfaces/ILumoriaRouter.sol";
 import "../interfaces/IDatabase.sol";
+import "../interfaces/ILumoriaLiquidityVault.sol";
 import "../interfaces/IERC20.sol";
 import "../lib/ReentrancyGuard.sol";
 import "../lib/TransferHelper.sol";
@@ -101,6 +102,7 @@ contract LiquidityModule is IModule, ReentrancyGuard {
         require(token_ != address(0), "Zero token");
         require(database_ != address(0), "Zero database");
         require(liquidityInterval_ >= MIN_INTERVAL, "Interval too short");
+        require(!_isSingleSidedToken(database_, token_), "Single-sided token");
 
         _initialized = true;
         _status = _NOT_ENTERED;
@@ -110,6 +112,23 @@ contract LiquidityModule is IModule, ReentrancyGuard {
         database = database_;
         liquidityInterval = liquidityInterval_;
         lastLiquidityTime = block.timestamp;
+    }
+
+    /// @dev A Permanent Single-Sided (mode-2) token can never take more pool
+    ///      liquidity — the vault rejects `addLiquidityLocked` for it — so a
+    ///      LiquidityModule attached after launch would only strand every BNB
+    ///      it ever received. Refuse at init instead. The Generator already
+    ///      rejects the module at launch; this closes the post-launch
+    ///      `proposeModuleAdd` path. Tolerates a legacy vault without the
+    ///      selector (pre-cutover) by treating it as "not single-sided".
+    function _isSingleSidedToken(address database_, address token_) internal view returns (bool) {
+        address vault = IDatabase(database_).liquidityVault();
+        if (vault == address(0) || vault.code.length == 0) return false;
+        try ILumoriaLiquidityVault(vault).isSingleSided(token_) returns (bool singleSided) {
+            return singleSided;
+        } catch {
+            return false;
+        }
     }
 
     // ─── Tax Receipt ────────────────────────────────────────────────

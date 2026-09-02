@@ -1,0 +1,45 @@
+{
+  "network": "bsc",
+  "chainId": 56,
+  "deployedAt": "2026-09-02T03:14:21.715Z",
+  "deploymentBlock": 119461440,
+  "deployer": "0x7F062E13f09dbFf8CB0433F0E777470107113A74",
+  "database": "0x9af6a42a78Fe4Ec3c7eFDFF3a2D52ecb5aad0d47",
+  "poolManager": "0x28e2Ea090877bF75740558f6BFB36A5ffeE9e9dF",
+  "hook": "0x0C2fCddDbcd5ae744F1ef26D9e09F4338533Eaec",
+  "legacyLiquidityVault": "0x6d1930E4b9b8D1bCe27E0d6DF4A7120bdc7A6F31",
+  "legacyGenerator": "0xCe5eD020D36aC8Ca1D87319769819E8aCE7723f2",
+  "tokenMasterCopy": "0x05D1Ba49AfB0DC2fF01DC1787Ce451a2b4A771eD",
+  "tokenMasterCodeHash": "0x0d8461460066ae5e03416809f06c2ff538f25e50395422f5783764b0c9769ec9",
+  "expectedTokenMasterCodeHash": "0x02adef7d4079c1ae20c34d0bc10e3aa6ba5604e266395b3666c8e433d067ab03",
+  "tokenMasterCopyV2": "0x472CDE197a6bD37D7EA77d388FFC9Eb0cBaaDC53",
+  "vaultV2": "0x0fD6C47b9218a127D786d2dD0299712d34eD6d75",
+  "generatorV2": "0xBE9190d1C247964852b5817f26fb6927843D94a5",
+  "liquidityModuleMasterCopyV2": "0x7AA2FCAf696279340BAbDf04d2b5a93a8621b649",
+  "legacyLiquidityModuleMasterCopy": "0x3a14505476741040418F17c96c21CD0cb0B431A8",
+  "singleSidedStartTickBounds": {
+    "minStartTick": 148200,
+    "maxStartTick": 196260
+  },
+  "constructorArgs": {
+    "vaultV2": [
+      "0x28e2Ea090877bF75740558f6BFB36A5ffeE9e9dF",
+      "0x9af6a42a78Fe4Ec3c7eFDFF3a2D52ecb5aad0d47",
+      "0x6d1930E4b9b8D1bCe27E0d6DF4A7120bdc7A6F31"
+    ],
+    "generatorV2": [
+      "0x9af6a42a78Fe4Ec3c7eFDFF3a2D52ecb5aad0d47"
+    ],
+    "liquidityModuleMasterCopyV2": [],
+    "tokenMasterCopyV2": []
+  },
+  "databasePointersRotated": true,
+  "cutoverAt": "2026-09-02T04:35:10.413Z",
+  "cutoverBlock": 119472210,
+  "cutoverTxHashes": {
+    "setTokenMasterCopy": "0xd19f7c9e7c99db8a95b04b9c44cbdb31dd2e678b820395152ea6d1e5746868e2",
+    "setLiquidityVault": "0x93abb2283e5f710cfdd866e9e03ea825659b53641d5a33de1b6a16e7db703241",
+    "setGenerator": "0x1f95a45ceff3d6a12f413a1e6927049f04c45eba8f057442373133dc4a9410dc",
+    "setModuleMasterCopy(2)": "0xdeacf7cfc0453591508f664e279d718d0b5f9fff7ec5bbc08e4fb03daa8846e1"
+  }
+}

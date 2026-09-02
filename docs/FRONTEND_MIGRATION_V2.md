@@ -274,6 +274,62 @@ these payable functions. The new events exist so a *future* FeeReceiver
 implementation (swapped via `Database.setFeeReceiver`) can act on per-user
 trade flow on-chain; analytics may index them for per-user fee context.
 
+## 3c. BREAKING: `generateProject` takes a tenth argument — token metadata
+
+`generateProject` gained a final `metadata` parameter, after `salt`:
+
+```solidity
+generateProject(name, symbol, buyFee, sellFee, modules[], launchMode,
+                launchPayload, allocations[], salt,
+                ILumoriaToken.Metadata metadata)   // ← NEW, last
+
+struct Metadata { string image; string socials; string contractURI; }
+```
+
+**It is last on purpose.** Appending left every pre-existing argument at its
+original index, so an integrator who misses it gets a clean ABI mismatch rather
+than a silently shifted `salt`.
+
+**Requires a redeploy of the Generator AND the token master copy** (they move
+together — the new Generator calls the new 6-argument
+`LumoriaToken.__init__`). Both are repointed on the live Database via
+`setTokenMasterCopy` / `setGenerator`; see `scripts/migrate-metadata.js` and
+`LAUNCH.md §1c`.
+
+### What the three strings are
+
+| Field | Goes to | Notes |
+|---|---|---|
+| `image` | `token.image()` / `token.logo()` | An **https gateway URL**, not `ar://` or `ipfs://` — indexers handle those inconsistently |
+| `socials` | `token.socials()` | ONE JSON string: `{"website":"…","twitter":"…","telegram":"…"}` |
+| `contractURI` | `token.contractURI()` | ERC-7572 document. **The only place a description can live** — the contract stores none |
+
+All three may be `""`. An empty launch is legal, and nothing in the launch path
+validates them.
+
+### Frontend work
+
+1. **Upload before you sign, once.** Write the artwork + the ERC-7572 JSON to
+   permanent storage and put the resulting URLs in `metadata`. Do this *outside*
+   the transaction-step `build()`: `build()` re-runs on every retry, and each run
+   would write a fresh permanent copy of the same image.
+2. **Never block a launch on storage.** A failed upload should degrade to a
+   launch with empty metadata, not a refused launch — the creator can set it
+   afterwards.
+3. **New post-launch writes**: `setImage` / `setSocials` / `setContractURI`,
+   creator-only and **frozen by `renounceManagement()`** (the token's
+   `onlyCreator` reads `TaxHandler.managementRenounced`). Worth its own control
+   on the manage page, gated the same way the fee controls are.
+4. **New reads**: `Token.image` / `.socials` / `.metadataURI` in the subgraph;
+   fetch the description from `metadataURI` client-side (immutable content →
+   cache it forever).
+5. **⚠️ Sanitize on read.** These strings are unvalidated creator input, stored
+   permanently. A `javascript:` URI in `socials()` rendered into an `href` is
+   stored XSS with no take-down path. Check the scheme on every render, not just
+   on the way in — a creator can call the setters directly.
+6. **⚠️ `predictTokenAddress` answers change** after the migration (the ERC-1167
+   init code embeds the master copy address). Re-read it at signing time.
+
 ## 4. New reads and writes worth surfacing
 
 | Contract | Member | Use |

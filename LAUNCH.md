@@ -42,6 +42,35 @@ Critical path (closed-beta-first):
 - [x] **Typed FeeReceiver interface (2026-07-20)** — closed the last frozen-layer door before deploy: the hook forwarded platform fees as `receiveFee(token)` with no trade context, and the hook can never be upgraded once pools exist. `IFeeReceiver` now has `receiveTradeFee(token, user, tradeAmount, isBuy)` (hook swaps — any router, `user=0x0` without hookData — and FlatCurve contributions) and `receiveLaunchFee(token, user)` (Generator BYOL). A future FeeReceiver swapped in via `Database.setFeeReceiver` receives full per-trade context on-chain (wager tracking etc.). Current implementation still just accrues; `FeeReceived` still fires on every inflow so the subgraph revenue handler is unchanged. ABI notes in `FRONTEND_MIGRATION_V2.md §3b`. **290 tests green.**
 - [x] **Flat launch fee (2026-07-20)** — replaced BYOL's 1% skim on the creator's LP seed with a **flat anti-spam fee** (`Database.launchFeeBnb`, 0.005 BNB at deploy, owner-settable via `setLaunchFee`, ≤ 1 BNB, can be 0) charged on **every** `generateProject` call: BYOL sends `launchFee + LP BNB` (ALL post-fee BNB seeds the pool), FLAT_CURVE sends exactly `launchFee` (raise creation now costs the fee too). FlatCurve *contributions* keep the 1% trade-like fee (→ `receiveTradeFee`). `BYOLLaunched` dropped its `platformFee` param. Wizard math in `FRONTEND_MIGRATION_V2.md §3a`; subgraph indexes `LaunchFeeUpdated` → `PlatformConfig.launchFeeBnb`. **298 tests green.**
 
+## 1c. Token display metadata — Generator + token master-copy swap (⬜ migration pending)
+
+Reverses the Phase-6 "metadata is off-chain" call. Without metadata on chain a
+Lumoria token is legible to Lumoria and to nobody else — every external scanner,
+wallet and aggregator renders it as a letter avatar with `$0`, because there is
+nothing to read and no reason to ask us. Spec: **DESIGN §12.2**; rollout notes:
+ROADMAP Phase 8.
+
+- [x] **Contracts.** `ILumoriaToken.Metadata { image, socials, contractURI }` on `__init__`; `contractURI()` (ERC-7572) + `image()`/`logo()`/`socials()` (launchpad convention) + creator-only setters that **also freeze on renounce**; `generateProject` gains `metadata` as its **last** parameter and emits `TokenMetadataInitialized`. No `description` on chain — it lives in the ERC-7572 JSON. **307 tests green.**
+- [x] **Subgraph.** `Token.image` / `.socials` / `.metadataURI`; new Generator handler + three token-template handlers. `codegen` + `build` pass.
+- [x] **Frontend.** Browser-side WebP re-encode → Arweave (ArDrive Turbo) upload before signing → URIs into calldata; creator editor on the manage page; scheme-checked rendering; caching image proxy for the Arweave propagation window. Needs **`ARWEAVE_SIGNER_KEY`** in the deploy env (`documentation/ENV.md`).
+- [ ] ⬜ **Run the migration on mainnet** — `npx hardhat run scripts/migrate-metadata.js --network bsc`. Deploys a new `LumoriaToken` master copy + `Generator` and repoints the live Database via `setTokenMasterCopy` / `setGenerator` (both owner-only).
+- [ ] ⬜ **Verify + redeploy the subgraph** with the new Generator address, then **`npm run abis`** in the frontend repo and **smoke-launch** to confirm `TokenMetadataInitialized` carries the URIs.
+
+⚠️ **This is a two-transaction swap and the pair must move together** — the new
+Generator calls the new 6-argument `__init__`. Between the two txs launches fail
+closed (the old Generator's 5-argument call reverts against the new master copy),
+which is the safe direction, but do not leave the window open.
+
+⚠️ **Tokens launched before the migration keep working and have no metadata
+getters** — they are clones frozen against the old master copy. Every read of
+these fields is optional (`try_` in the subgraph, a fallback avatar in the UI)
+for exactly this reason. If the beta has not launched a token yet, this window
+is empty.
+
+⚠️ **`predictTokenAddress` answers change** — the ERC-1167 init code embeds the
+master copy, so the same salt derives a different address afterwards. The launch
+path already re-reads the prediction at signing time.
+
 ## 1b. Frozen-Layer Decisions (✅ all closed)
 
 `TaxHandler` is cloned per token and `LumoriaHook`'s address is part of every
@@ -86,7 +115,7 @@ Validates the deploy + a real launch/buy against the **actual canonical V4 PoolM
 - [x] **Deploy-block recording** — `deploy-base.js` now writes `startBlock` for the manifest.
 - [x] **Scaffold the subgraph** — full implementation in `subgraph/` (7 singleton data sources + 7 dynamic templates + schema + 14 mappings), built from `SUBGRAPH.md`. **`graph codegen` + `graph build` both pass** (every event signature matches the compiled ABIs; all mappings compile to wasm).
 - [ ] Index a fork/testnet deployment; validate the queries the UI needs (token list, trades/OHLC, holders, rewards, raises, rebates, volume).
-- [x] ✅ **Deployed to Goldsky (2026-07-21)** — `gen-networks` injected the mainnet addresses + startBlock `111199483`; `npm run deploy:goldsky` shipped **`lumoria-bsc/1.0.0`**, healthy and 100% synced. API: `https://api.goldsky.com/api/public/project_cmg2x3lrvy37d01vq4bsnbtig/subgraphs/lumoria-bsc/1.0.0/gn`. (Studio path kept as `deploy:studio` if ever needed.)
+- [x] ✅ **Deployed to Goldsky (repaired 2026-08-31)** — **`lumoria-bsc/1.0.2`** declares the PrizePool ABI on the TaxHandler template and cleanly replays from the first production launch block (`116894643`). API: `https://api.goldsky.com/api/public/project_cmg2x3lrvy37d01vq4bsnbtig/subgraphs/lumoria-bsc/1.0.2/gn`. (Studio path kept as `deploy:studio` if ever needed.)
 
 ## 5. Frontend Integration (⬜ — can run parallel with audit)
 
@@ -111,6 +140,47 @@ Validates the deploy + a real launch/buy against the **actual canonical V4 PoolM
 - [ ] Set up monitoring/alerting on hook + vault events (large taxes, failed trades from contract recipients, rebate drain).
 - [ ] Submit the LumoriaHook to the **Uniswap routing-API hook allowlist** so pools are routable from app.uniswap.org (post-audit; go-to-market, not contract work).
 - [ ] Publish addresses + docs for integrators.
+
+## 8. Permanent Single-Sided V2 rollout / rollback (🟢 cutover live at block 119472210, 2026-09-02)
+
+Status: steps 1–10 done (fork rehearsal green, four candidates deployed,
+verified, and rotated — see `deployments/DEPLOYMENTS.md` v1.2; frontend
+`npm run abis` re-run). Remaining: subgraph `lumoria-bsc/1.1.0` on Goldsky +
+frontend `NEXT_PUBLIC_SUBGRAPH_URL`, then the canary (step 11, from the UI)
+and the feature flag (step 12).
+
+1. Approve the §18 rounding direction/copy, canary parameters, and
+   Database-owner disclosure. Confirm (or retune with
+   `Generator.setSingleSidedStartTickBounds`) the default start-tick window
+   `148_200..196_260` ≈ 366 BNB down to ≈ 3 BNB starting FDV.
+2. Complete and verify the separate metadata-aware LumoriaToken master-copy
+   migration. Generator V2 preserves that current ABI and candidate deployment
+   refuses to proceed while `Database.tokenMasterCopy` is incompatible.
+3. Run all local contract, subgraph, and frontend checks.
+4. Run the production-state BSC fork rehearsal against the PoolManager and
+   addresses in `deployments/bsc.json`.
+5. Deploy candidates with `deploy-single-sided-v2.js`; this writes a candidate
+   manifest and does not rotate Database pointers.
+6. Verify both candidates and review constructor wiring: Vault V2 must reference
+   the live Database, canonical PoolManager, and current vault as `legacyVault`;
+   Generator V2 must reference the live Database.
+7. Add old and new Generator/vault sources to a new subgraph version, verify a
+   clean historical replay, and keep the frontend flag off.
+8. Generate and independently review setter calldata with
+   `prepare-single-sided-v2-cutover.js`.
+9. Call `Database.setLiquidityVault(VaultV2)`, then immediately compare old-token
+   liquidity views and smoke a legacy liquidity operation.
+10. Call `Database.setGenerator(GeneratorV2)`, then smoke BYOL and Flat Curve.
+11. Launch one approved mode-2 canary; buy and sell through both Lumoria and raw
+    V4-compatible routing; confirm hook fees, entities, prices, and analytics.
+12. Enable the frontend feature flag only after subgraph health and monitoring
+    checks pass.
+
+Before the first mode-2 launch, restore both old pointers to roll back. After a
+mode-2 launch, disable new launches and restore the old Generator if needed, but
+normally retain Vault V2 because it owns the new permanent position and
+aggregates historical analytics. Existing pools keep trading independently of
+the Generator pointer. Never attempt liquidity removal or migration.
 
 ---
 

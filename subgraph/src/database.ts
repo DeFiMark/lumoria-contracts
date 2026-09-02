@@ -4,6 +4,7 @@ import {
   VolumeRegistered,
   PlatformFeeUpdated,
   LaunchFeeUpdated,
+  GeneratorUpdated,
 } from "../generated/Database/Database";
 import { TaxHandler } from "../generated/Database/TaxHandler";
 import { LumoriaToken as LumoriaTokenContract } from "../generated/Database/LumoriaToken";
@@ -44,6 +45,13 @@ import {
   getOrCreateHolder,
 } from "./helpers";
 
+/** Keep the cached exclusion/bootstrap address correct across Generator rotations. */
+export function handleGeneratorUpdated(event: GeneratorUpdated): void {
+  let sys = getOrCreateSystemAddresses(event.address);
+  sys.generator = event.params.newGenerator;
+  sys.save();
+}
+
 // ─── Bootstrap: a new token launch ──────────────────────────────────
 // Fires in the SAME tx as the initial mint Transfer + initial ModuleAdded,
 // which a freshly-spawned template would MISS — so we hydrate genesis state
@@ -79,6 +87,9 @@ export function handleTokenRegistered(event: TokenRegistered): void {
   token.lastPriceBnb = ZERO_BD;
   token.name = "";
   token.symbol = "";
+  token.image = "";
+  token.socials = "";
+  token.metadataURI = "";
 
   // Hydrate token metadata + supply (token.__init__ ran before registerToken).
   let lt = LumoriaTokenContract.bind(tokenAddr);
@@ -86,6 +97,15 @@ export function handleTokenRegistered(event: TokenRegistered): void {
   if (!nm.reverted) token.name = nm.value;
   let sym = lt.try_symbol();
   if (!sym.reverted) token.symbol = sym.value;
+  // Display metadata is written by the same `__init__`, so it is readable here
+  // for exactly the same reason name/symbol are. `Generator.TokenMetadataInitialized`
+  // sets it again from the log — belt and suspenders, identical values.
+  let img = lt.try_image();
+  if (!img.reverted) token.image = img.value;
+  let soc = lt.try_socials();
+  if (!soc.reverted) token.socials = soc.value;
+  let uri = lt.try_contractURI();
+  if (!uri.reverted) token.metadataURI = uri.value;
   let supply = lt.try_totalSupply();
   let totalSupply = supply.reverted ? ZERO_BI : supply.value;
   token.totalSupply = totalSupply;

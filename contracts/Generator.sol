@@ -11,10 +11,12 @@ pragma solidity 0.8.28;
         2. Clones a TaxHandler.
         3. Initializes the TaxHandler — which in turn clones + inits each
            configured tokenomics module.
-        4. Initializes the Token. The token's `pair` reference is the
-           Uniswap V4 PoolManager — the address that custodies pool
-           reserves, and therefore the address excluded from reward-share
-           tracking (exactly the role the V2 pair used to play).
+        4. Initializes the Token, including its display metadata (artwork /
+           socials / ERC-7572 contractURI — see `ILumoriaToken.Metadata`).
+           The token's `pair` reference is the Uniswap V4 PoolManager — the
+           address that custodies pool reserves, and therefore the address
+           excluded from reward-share tracking (exactly the role the V2
+           pair used to play).
         5. Registers the token in the Database.
         6. Charges the flat anti-spam launch fee (`Database.launchFeeBnb`,
            absolute wei, owner-tunable) — on EVERY launch mode, forwarded
@@ -32,6 +34,10 @@ pragma solidity 0.8.28;
                rest, initializes FlatCurve with the raise config. Raise
                BNB comes from contributors (1% platform fee per
                contribution, forwarded as trade-fee flow).
+             - SINGLE_SIDED: msg.value must equal the launch fee exactly.
+               Transfers the full supply to the LiquidityVault, which
+               initializes and locks one token-only V4 position. The creator
+               receives no initial token allocation.
 
     The Generator holds no custody between transactions. Every call is
     self-contained.
@@ -44,6 +50,7 @@ import "./interfaces/IGenerator.sol";
 import "./interfaces/ITaxHandler.sol";
 import "./interfaces/IDatabase.sol";
 import "./interfaces/ILumoriaToken.sol";
+import "./interfaces/ILumoriaLiquidityVault.sol";
 import "./interfaces/ILumoriaRouter.sol";
 import "./interfaces/IFlatCurve.sol";
 import "./interfaces/IFeeReceiver.sol";
@@ -61,6 +68,28 @@ contract Generator is IGenerator, ReentrancyGuard {
 
     IDatabase public immutable database;
 
+    // ─── Permanent Single-Sided product bounds ─────────────────────
+    //
+    // The vault enforces only TickMath-safe bounds. These are the PRODUCT
+    // bounds on the starting price: they stop unit inversion (typing a
+    // token/BNB ratio where BNB/token was meant), unusably thin depth, and
+    // absurd starting valuations. Owner-tunable so they can track BNB's
+    // dollar price without redeploying anything.
+    //
+    // Orientation: the pool price is token/BNB, so a LOWER tick means a
+    // HIGHER starting FDV. For the fixed 1B supply:
+    //
+    //     startingFdvBnb = 1e9 / 1.0001^startTick
+    //
+    //   MIN start tick 148_200 → ≈ 366 BNB starting FDV  (≈ $250k at ~$690/BNB)
+    //   MAX start tick 196_260 → ≈   3 BNB starting FDV  (≈ $2k   at ~$690/BNB)
+    int24 public constant SINGLE_SIDED_TICK_SPACING = 60;
+    int24 public constant DEFAULT_SINGLE_SIDED_MIN_START_TICK = 148_200;
+    int24 public constant DEFAULT_SINGLE_SIDED_MAX_START_TICK = 196_260;
+
+    int24 public override singleSidedMinStartTick;
+    int24 public override singleSidedMaxStartTick;
+
     // ─── Events ────────────────────────────────────────────────────
 
     event BYOLLaunched(address indexed token, uint256 tokensForLP, uint256 bnbForLP);
@@ -68,6 +97,43 @@ contract Generator is IGenerator, ReentrancyGuard {
     constructor(address _database) {
         require(_database != address(0), "Gen: zero database");
         database = IDatabase(_database);
+        singleSidedMinStartTick = DEFAULT_SINGLE_SIDED_MIN_START_TICK;
+        singleSidedMaxStartTick = DEFAULT_SINGLE_SIDED_MAX_START_TICK;
+        emit SingleSidedStartTickBoundsUpdated(
+            DEFAULT_SINGLE_SIDED_MIN_START_TICK, DEFAULT_SINGLE_SIDED_MAX_START_TICK
+        );
+    }
+
+    // ─── Owner Tuning ──────────────────────────────────────────────
+
+    /// @notice Retune the mode-2 starting-tick window. Only the Database
+    ///         owner (the platform multisig) may call. Alignment to the pool's
+    ///         tick spacing is required so every bound is itself a launchable
+    ///         tick; TickMath safety is still enforced by the vault.
+    function setSingleSidedStartTickBounds(int24 minStartTick, int24 maxStartTick)
+        external
+        override
+    {
+        require(msg.sender == database.owner(), "Gen: only owner");
+        require(
+            minStartTick % SINGLE_SIDED_TICK_SPACING == 0
+                && maxStartTick % SINGLE_SIDED_TICK_SPACING == 0,
+            "Gen: unaligned bounds"
+        );
+        require(minStartTick <= maxStartTick, "Gen: inverted bounds");
+
+        singleSidedMinStartTick = minStartTick;
+        singleSidedMaxStartTick = maxStartTick;
+        emit SingleSidedStartTickBoundsUpdated(minStartTick, maxStartTick);
+    }
+
+    function singleSidedStartTickBounds()
+        external
+        view
+        override
+        returns (int24 minStartTick, int24 maxStartTick)
+    {
+        return (singleSidedMinStartTick, singleSidedMaxStartTick);
     }
 
     function getDatabase() external view override returns (address) {
@@ -85,7 +151,8 @@ contract Generator is IGenerator, ReentrancyGuard {
         LaunchMode launchMode,
         bytes calldata launchPayload,
         AllocationData[] calldata allocations,
-        bytes32 salt
+        bytes32 salt,
+        ILumoriaToken.Metadata calldata metadata
     ) external payable override nonReentrant returns (address token, address taxHandler) {
         // 1. Deterministic token clone (so the user can pre-compute the token
         //    address off-chain via CREATE2 before the tx lands — useful for
@@ -111,7 +178,7 @@ contract Generator is IGenerator, ReentrancyGuard {
         );
 
         // 4. Init Token — Generator is msg.sender → receives the 1B supply
-        ILumoriaToken(token).__init__(name, symbol, pair, taxHandler, msg.sender);
+        ILumoriaToken(token).__init__(name, symbol, pair, taxHandler, msg.sender, metadata);
 
         // 5. Register in the Database (the curated-token registry the hook checks)
         database.registerToken(token, msg.sender, taxHandler);
@@ -128,14 +195,56 @@ contract Generator is IGenerator, ReentrancyGuard {
         // 7. Launch mode (allocations are carved from the creator's remainder)
         if (launchMode == LaunchMode.BYOL) {
             _launchBYOL(token, launchPayload, allocations, msg.value - launchFee);
-        } else {
+        } else if (launchMode == LaunchMode.FLAT_CURVE) {
             require(msg.value == launchFee, "Gen: no BNB on FLAT_CURVE");
             _launchFlatCurve(token, taxHandler, launchPayload, allocations);
+        } else if (launchMode == LaunchMode.SINGLE_SIDED) {
+            require(msg.value == launchFee, "Gen: no BNB on SINGLE_SIDED");
+            _launchSingleSided(token, launchPayload, allocations, modules);
+        } else {
+            revert("Gen: bad launch mode");
         }
 
         emit ProjectGenerated(
             token, taxHandler, msg.sender, name, symbol, buyFee, sellFee, uint8(launchMode)
         );
+        emit TokenMetadataInitialized(
+            token, metadata.image, metadata.socials, metadata.contractURI
+        );
+    }
+
+    // ─── Permanent Single-Sided Launch ─────────────────────────────
+
+    /// @dev payload = abi.encode(int24 startTick). The vault receives the
+    ///      entire final supply and permanently commits it to the canonical
+    ///      V4 pool; no initial token allocation is permitted.
+    function _launchSingleSided(
+        address token,
+        bytes calldata payload,
+        AllocationData[] calldata allocations,
+        ITaxHandler.ModuleInitData[] calldata modules
+    ) internal {
+        require(payload.length == 32, "Gen: bad single-sided payload");
+        require(allocations.length == 0, "Gen: allocations disabled");
+
+        uint256 moduleCount = modules.length;
+        for (uint256 i = 0; i < moduleCount; i++) {
+            require(modules[i].moduleType != 2, "Gen: liquidity module disabled");
+        }
+
+        int24 startTick = abi.decode(payload, (int24));
+        require(
+            startTick >= singleSidedMinStartTick && startTick <= singleSidedMaxStartTick,
+            "Gen: start tick out of bounds"
+        );
+        address vault = database.liquidityVault();
+        require(vault != address(0), "Gen: liquidity vault unset");
+
+        TransferHelper.safeTransfer(token, vault, TOTAL_SUPPLY);
+        (uint256 tokenAmount, uint128 liquidity, uint160 sqrtPriceX96) =
+            ILumoriaLiquidityVault(vault).initializeSingleSided(token, startTick);
+
+        emit SingleSidedLaunched(token, startTick, sqrtPriceX96, tokenAmount, liquidity);
     }
 
     // ─── BYOL Launch ───────────────────────────────────────────────

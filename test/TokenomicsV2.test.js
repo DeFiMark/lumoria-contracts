@@ -32,6 +32,7 @@ const {
     buildBurnInitData,
     buildLiquidityInitData,
     farDeadline,
+    EMPTY_METADATA,
     MODULE_TYPE,
     LAUNCH_MODE,
 } = require("./fixtures/deploy");
@@ -372,6 +373,7 @@ describe("TokenomicsV2 Phase A", function () {
                 payload,
                 [],
                 salt,
+                EMPTY_METADATA,
                 { value: ethers.parseEther("0.005") }, // flat launch fee
             );
             const receipt = await tx.wait();

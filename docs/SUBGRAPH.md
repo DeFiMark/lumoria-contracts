@@ -81,6 +81,7 @@ In the `TokenRegistered` (or `ProjectGenerated`) handler, after creating the tem
 - **Per-module type-specific reads** (these have NO event, so they must be call-hydrated): RewardModule → `rewardToken()`, `minDistribution()`; BurnModule → `burnInterval()`, `lastBurnTime()`; LiquidityModule → `liquidityInterval()`, `lastLiquidityTime()`; CreatorFeeModule → `recipient()`. Without this, `Module.rewardToken` / interval fields stay null and the reward/burn panels render blank.
 - For FlatCurve launches, read the raise config from the FlatCurve clone when creating the `Raise` (only `hardCap` is in the `FlatCurveLaunched` event): `startTime()`, `endTime()`, `minContribution()`, `maxContribution()`, `tokensForPresale()`, `tokensForLP()`.
 - `LumoriaToken.totalSupply()` (and treat the Generator's post-launch balance as the initial holder via `balanceOf` if you need holder accuracy from genesis).
+- `LumoriaToken.image()`, `socials()`, `contractURI()` → display metadata. Written by the same `__init__` as `name`/`symbol`, so it is readable here for exactly the same reason. (`Generator.TokenMetadataInitialized` carries the same three values as a log — index both; they agree, and neither depends on the other surviving.)
 
 After this bootstrap, **all subsequent changes arrive as normal events in later transactions** (`FeesUpdated`, `ModuleAdded`/`Removed`/`Updated`, `Transfer`, …) and are indexed normally. So: contract-call hydration for the genesis snapshot, events for everything after.
 
@@ -137,6 +138,7 @@ Signatures are exact (indexed fields marked). "Emitter" is the concrete contract
 | Event | Signature | Fires when | Handler |
 |---|---|---|---|
 | `ProjectGenerated` | `(address indexed token, address indexed taxHandler, address indexed creator, string name, string symbol, uint256 buyFee, uint256 sellFee, uint8 launchMode)` | end of every launch | fill `Token` metadata (name/symbol/launchMode); good bootstrap point (see §3) |
+| `TokenMetadataInitialized` | `(address indexed token, string image, string socials, string contractURI)` | end of every launch | fill `Token.image` / `.socials` / `.metadataURI`. **This event exists because of the §3 ordering trap**: the token's own `ContractURIUpdated` fires inside `__init__`, before the `LumoriaToken` template is spawned, so a template can never see it. The Generator is static, so this always lands |
 | `BYOLLaunched` | `(address indexed token, uint256 tokensForLP, uint256 bnbForLP)` | BYOL branch | record LP seed on `Token` (the flat launch fee is on `FeeReceiver.LaunchFeeReceived`) |
 | `FlatCurveLaunched` | `(address indexed token, address indexed flatCurve, uint256 hardCap)` | FLAT_CURVE branch | create `Raise`, spawn `FlatCurve` template |
 | `AllocationMinted` | `(address indexed token, address indexed beneficiary, uint256 amount)` | an `allocations` entry with `duration == 0` | create a `TokenAllocation` (locked=false) → token + beneficiary |
@@ -155,6 +157,17 @@ Fires on **every** swap on our pools, regardless of router. This is the canonica
 `platformFee` + `taxTaken` are **BNB amounts**. Lifetime platform fee per token, total tax routed, buy/sell counts, and volume/price charts all derive from these two events.
 
 ### 5.4 LumoriaLiquidityVault (singleton) — locked liquidity / TVL
+
+Vault V2 is an additional static data source from its own deployment block; the
+old vault source remains for historical replay. `SingleSidedPositionLocked`
+provides authoritative pool id, tick bounds, initialized sqrt price, committed
+token amount, liquidity, and burned dust. Generator V2 is likewise additive and
+its `SingleSidedLaunched` event supplies the mode-specific launch record.
+
+At a mode-2 launch, initialized price and committed token liquidity are valid
+even though BNB principal and trade volume are both zero. Indexers must not
+classify that state as unlaunched or unfunded, and pool initialization must not
+increment volume.
 
 | Event | Signature | Fires when | Handler |
 |---|---|---|---|
@@ -210,12 +223,17 @@ There is **no removal event** — liquidity is permanent by construction. TVL on
 | `RebateDeactivated` | `(address indexed token)` | pool drained | `Rebate.active = false` |
 | `CreditorUpdated` | `(address indexed creditor, bool authorized)` | admin rotates creditor (the hook) | audit |
 
-### 5.8 LumoriaToken (template, one per token) — holders/supply
+### 5.8 LumoriaToken (template, one per token) — holders/supply + metadata edits
 
 | Event | Signature | Fires when | Handler |
 |---|---|---|---|
 | `Transfer` | `(address indexed from, address indexed to, uint256 value)` | every transfer (incl. mint from `0x0`, burn to `0x0`) | maintain `Holder.balance`; holder count on 0-crossings; `totalSupply` on mint/burn |
 | `Approval` | `(address indexed owner, address indexed spender, uint256 value)` | allowance change | usually ignore (read directly when needed) |
+| `ImageUpdated` | `(string image)` | creator calls `setImage` | patch `Token.image` |
+| `SocialsUpdated` | `(string socials)` | creator calls `setSocials` | patch `Token.socials` |
+| `ContractURIUpdated` | `()` | creator calls `setContractURI`, and once inside `__init__` | **ERC-7572 carries no arguments** — the handler must `try_contractURI()` and patch `Token.metadataURI`. Skip the write on a reverted read, or a transient RPC failure blanks a URI that is still live on chain |
+
+⚠️ These three carry **post-launch edits only**. The `ContractURIUpdated` emitted by `__init__` is one of the §3 same-tx casualties — the template does not exist yet when it fires. Launch values come from `Generator.TokenMetadataInitialized` (§5.2) and from the hydration call in the bootstrap handler (§3).
 
 ⚠️ The **PoolManager address is excluded from reward-share tracking** on-chain (it's the token's `pair`). It still appears in `Transfer` events (it custodies pool reserves) — count it as a holder if you want, but know it won't accrue reward dividends. ⚠️ Initial 1B mint to the Generator happens pre-registration in the same tx (§3).
 
@@ -328,6 +346,14 @@ type Token @entity {
     name: String!
     symbol: String!
     decimals: Int!
+    # Display metadata (DESIGN §12.2). Seeded from TokenMetadataInitialized,
+    # kept current by the token's ImageUpdated/SocialsUpdated/ContractURIUpdated.
+    # Non-null: "" means "launched without artwork", which is a known state, not
+    # an unknown one. No `description` — it lives only in the metadataURI JSON,
+    # which clients fetch directly (immutable, so cacheable forever).
+    image: String!                # artwork URI
+    socials: String!              # one JSON string of links
+    metadataURI: String!          # ERC-7572 contractURI()
     launchMode: Int!              # 0 BYOL, 1 FlatCurve
     launchedAt: BigInt!
     launchTx: Bytes!
@@ -661,7 +687,7 @@ PlatformConfig (singleton)
 dataSources:
   - Database        # events: TokenRegistered, VolumeRegistered, PlatformFeeUpdated,
                     #         LaunchFeeUpdated, ModuleMasterCopySet, *Updated(infra), MasterCopyUpdated
-  - Generator       # ProjectGenerated, BYOLLaunched, FlatCurveLaunched
+  - Generator       # ProjectGenerated, TokenMetadataInitialized, BYOLLaunched, FlatCurveLaunched
   - LumoriaHook     # TokenPurchased, TokenSold, LumoriaPoolInitialized
   - LumoriaLiquidityVault   # PoolInitialized, LiquidityLocked
   - FeeReceiver     # FeeReceived (indexed — revenue total), TradeFeeReceived,
@@ -671,7 +697,7 @@ dataSources:
   - VestingVault    # ScheduleCreated, TokensReleased
   # - PoolManager   # OPTIONAL: Swap (filter by our PoolIds) for sqrtPrice OHLC
 templates:
-  - LumoriaToken        # Transfer (+ Approval)
+  - LumoriaToken        # Transfer (+ Approval), ImageUpdated, SocialsUpdated, ContractURIUpdated
   - TaxHandler          # fees + module + share + tax-distributed events + ManagementRenounced
   - CreatorFeeModule    # TaxAccrued, TaxWithdrawn, RecipientUpdated
   - RewardModule        # TaxReceived, DividendsDistributed, RewardClaimed, ShareUpdated

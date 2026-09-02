@@ -7,6 +7,7 @@ const {
     useRealGenerator,
     buildCreatorFeeInitData,
     encodeFlatCurvePayload,
+    EMPTY_METADATA,
     MODULE_TYPE,
     LAUNCH_MODE,
 } = require("./fixtures/deploy");
@@ -55,6 +56,7 @@ async function launchFlatCurve(base, overrides = {}) {
         payload,
         [],
         salt,
+        EMPTY_METADATA,
         { value: LAUNCH_FEE }, // flat anti-spam launch fee
     );
     const receipt = await tx.wait();

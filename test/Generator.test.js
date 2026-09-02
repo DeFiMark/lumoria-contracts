@@ -7,6 +7,8 @@ const {
     buildCreatorFeeInitData,
     encodeBYOLPayload,
     encodeFlatCurvePayload,
+    EMPTY_METADATA,
+    sampleMetadata,
     MODULE_TYPE,
     LAUNCH_MODE,
 } = require("./fixtures/deploy");
@@ -62,6 +64,7 @@ describe("Generator", function () {
                 encodeBYOLPayload(TOTAL_SUPPLY),
                 [],
                 salt,
+                EMPTY_METADATA,
                 { value: ethers.parseEther("1") },
             );
             const receipt = await tx.wait();
@@ -75,6 +78,71 @@ describe("Generator", function () {
             });
             const parsed = base.generator.interface.parseLog(log);
             expect(parsed.args.token).to.equal(predicted);
+        });
+    });
+
+    describe("display metadata", function () {
+        it("writes it into the token and logs it from the Generator", async function () {
+            const base = await loadFixture(deployBase);
+            await useRealGenerator(base);
+            const { creator } = base.signers;
+            const salt = randomSalt();
+            const predicted = await base.generator.predictTokenAddress(salt);
+            const meta = sampleMetadata();
+
+            // The log matters as much as the storage: the subgraph's
+            // `LumoriaToken` template is spawned by `Database.TokenRegistered`
+            // in THIS transaction, and a dynamic data source cannot see events
+            // emitted before it existed. `TokenMetadataInitialized` comes from
+            // the Generator — a static data source — so it always lands.
+            await expect(base.generator.connect(creator).generateProject(
+                "Arted", "ART",
+                0, 0,
+                singleCreatorFeeModule(creator.address),
+                LAUNCH_MODE.BYOL,
+                encodeBYOLPayload(TOTAL_SUPPLY),
+                [],
+                salt,
+                meta,
+                { value: ethers.parseEther("1") },
+            )).to.emit(base.generator, "TokenMetadataInitialized")
+                .withArgs(predicted, meta.image, meta.socials, meta.contractURI);
+
+            const token = await ethers.getContractAt("LumoriaToken", predicted);
+            expect(await token.image()).to.equal(meta.image);
+            expect(await token.socials()).to.equal(meta.socials);
+            expect(await token.contractURI()).to.equal(meta.contractURI);
+        });
+
+        it("launches fine with no metadata at all", async function () {
+            const base = await loadFixture(deployBase);
+            await useRealGenerator(base);
+            const { creator } = base.signers;
+            const salt = randomSalt();
+            const predicted = await base.generator.predictTokenAddress(salt);
+
+            // Artwork uploads happen off-chain before this call, and a storage
+            // outage must never block a paid launch — so empty is a legal
+            // launch, and the creator sets the artwork afterwards.
+            await expect(base.generator.connect(creator).generateProject(
+                "Bare", "BARE",
+                0, 0,
+                singleCreatorFeeModule(creator.address),
+                LAUNCH_MODE.BYOL,
+                encodeBYOLPayload(TOTAL_SUPPLY),
+                [],
+                salt,
+                EMPTY_METADATA,
+                { value: ethers.parseEther("1") },
+            )).to.emit(base.generator, "TokenMetadataInitialized")
+                .withArgs(predicted, "", "", "");
+
+            const token = await ethers.getContractAt("LumoriaToken", predicted);
+            expect(await token.contractURI()).to.equal("");
+
+            // ...and the creator can still fill it in later.
+            await token.connect(creator).setImage("https://arweave.net/later");
+            expect(await token.image()).to.equal("https://arweave.net/later");
         });
     });
 
@@ -99,6 +167,7 @@ describe("Generator", function () {
                 encodeBYOLPayload(tokensForLP),
                 [],
                 salt,
+                EMPTY_METADATA,
                 { value: bnbForLP + LAUNCH_FEE },
             )).to.emit(base.feeReceiver, "LaunchFeeReceived")
                 .withArgs(predicted, creator.address, LAUNCH_FEE);
@@ -141,6 +210,7 @@ describe("Generator", function () {
                     encodeBYOLPayload(TOTAL_SUPPLY),
                     [],
                     randomSalt(),
+                    EMPTY_METADATA,
                     { value: 0 },
                 ),
             ).to.be.revertedWith("Gen: insufficient launch fee");
@@ -157,6 +227,7 @@ describe("Generator", function () {
                     encodeBYOLPayload(TOTAL_SUPPLY),
                     [],
                     randomSalt(),
+                    EMPTY_METADATA,
                     { value: LAUNCH_FEE },
                 ),
             ).to.be.revertedWith("Gen: zero BNB");
@@ -177,6 +248,7 @@ describe("Generator", function () {
                 encodeBYOLPayload(TOTAL_SUPPLY),
                 [],
                 randomSalt(),
+                EMPTY_METADATA,
                 { value: ethers.parseEther("1") },
             );
 
@@ -197,6 +269,7 @@ describe("Generator", function () {
                     encodeBYOLPayload(0n),
                     [],
                     randomSalt(),
+                    EMPTY_METADATA,
                     { value: ethers.parseEther("1") },
                 ),
             ).to.be.revertedWith("Gen: bad tokensForLP");
@@ -215,6 +288,7 @@ describe("Generator", function () {
                 encodeBYOLPayload(ethers.parseEther("500000000")),
                 [],
                 salt,
+                EMPTY_METADATA,
                 { value: ethers.parseEther("10") },
             );
             const tokenAddr = await base.generator.predictTokenAddress(salt);
@@ -257,6 +331,7 @@ describe("Generator", function () {
                 payload,
                 [],
                 salt,
+                EMPTY_METADATA,
                 { value: LAUNCH_FEE }, // flat anti-spam fee, both launch modes
             );
             const receipt = await tx.wait();
@@ -313,6 +388,7 @@ describe("Generator", function () {
                     payload,
                     [],
                     randomSalt(),
+                    EMPTY_METADATA,
                 ),
             ).to.be.revertedWith("Gen: insufficient launch fee");
         });
@@ -357,6 +433,7 @@ describe("Generator", function () {
                     payload,
                     [],
                     randomSalt(),
+                    EMPTY_METADATA,
                     { value: ethers.parseEther("1") },
                 ),
             ).to.be.revertedWith("Gen: no BNB on FLAT_CURVE");
@@ -385,6 +462,7 @@ describe("Generator", function () {
                     encodeBYOLPayload(tokensForLP),
                     [alloc(user1.address, amount)],
                     salt,
+                    EMPTY_METADATA,
                     { value: ethers.parseEther("5") },
                 ),
             ).to.emit(base.generator, "AllocationMinted");
@@ -414,6 +492,7 @@ describe("Generator", function () {
                     encodeBYOLPayload(tokensForLP),
                     [alloc(user1.address, amount, 0, ONE_YEAR)],
                     salt,
+                    EMPTY_METADATA,
                     { value: ethers.parseEther("5") },
                 ),
             ).to.emit(base.generator, "AllocationVested");
@@ -454,6 +533,7 @@ describe("Generator", function () {
                 encodeBYOLPayload(tokensForLP),
                 [alloc(user1.address, amount, 0, ONE_YEAR)],
                 salt,
+                EMPTY_METADATA,
                 { value: ethers.parseEther("5") },
             );
 
@@ -490,6 +570,7 @@ describe("Generator", function () {
                     encodeBYOLPayload(tokensForLP),
                     [alloc(user1.address, tooMuch)],
                     randomSalt(),
+                    EMPTY_METADATA,
                     { value: ethers.parseEther("1") },
                 ),
             ).to.be.revertedWith("Gen: alloc exceeds remainder");
@@ -508,6 +589,7 @@ describe("Generator", function () {
                     encodeBYOLPayload(ethers.parseEther("600000000")),
                     [alloc(user1.address, 0n)],
                     randomSalt(),
+                    EMPTY_METADATA,
                     { value: ethers.parseEther("1") },
                 ),
             ).to.be.revertedWith("Gen: zero alloc amount");
@@ -530,6 +612,7 @@ describe("Generator", function () {
                 encodeBYOLPayload(tokensForLP),
                 [alloc(user1.address, a1), alloc(user2.address, a2, 0, ONE_YEAR)],
                 salt,
+                EMPTY_METADATA,
                 { value: ethers.parseEther("5") },
             );
 
@@ -570,6 +653,7 @@ describe("Generator", function () {
                 payload,
                 [alloc(user1.address, amount)],
                 salt,
+                EMPTY_METADATA,
                 { value: LAUNCH_FEE },
             );
 

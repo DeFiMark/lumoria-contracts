@@ -1,5 +1,11 @@
 import { Address, BigInt } from "@graphprotocol/graph-ts";
-import { Transfer } from "../generated/templates/LumoriaToken/LumoriaToken";
+import {
+  Transfer,
+  ImageUpdated,
+  SocialsUpdated,
+  ContractURIUpdated,
+  LumoriaToken as LumoriaTokenContract,
+} from "../generated/templates/LumoriaToken/LumoriaToken";
 import { Token, Holder, SystemAddresses } from "../generated/schema";
 import {
   ZERO_BI,
@@ -59,5 +65,41 @@ export function handleTransfer(event: Transfer): void {
 
   if (holderCount < 0) holderCount = 0;
   token.holderCount = holderCount;
+  token.save();
+}
+
+// ─── Display metadata (creator edits, until renounce freezes them) ───
+//
+// Launch-time values arrive via Database.TokenRegistered / the Generator's
+// TokenMetadataInitialized — this template is created DURING the launch
+// transaction and so cannot observe events emitted earlier in it. These
+// handlers only carry post-launch edits.
+
+export function handleImageUpdated(event: ImageUpdated): void {
+  let token = Token.load(event.address.toHexString());
+  if (token == null) return;
+  token.image = event.params.image;
+  token.save();
+}
+
+export function handleSocialsUpdated(event: SocialsUpdated): void {
+  let token = Token.load(event.address.toHexString());
+  if (token == null) return;
+  token.socials = event.params.socials;
+  token.save();
+}
+
+/**
+ * ERC-7572 defines `ContractURIUpdated()` with NO arguments — the new URI is
+ * only obtainable by re-reading the contract, so this is the one metadata
+ * handler that must make a call.
+ */
+export function handleContractURIUpdated(event: ContractURIUpdated): void {
+  let token = Token.load(event.address.toHexString());
+  if (token == null) return;
+  let uri = LumoriaTokenContract.bind(event.address).try_contractURI();
+  // A reverted read would otherwise blank a URI that is still live on chain.
+  if (uri.reverted) return;
+  token.metadataURI = uri.value;
   token.save();
 }

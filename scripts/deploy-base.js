@@ -16,7 +16,7 @@
  *   7. Create2Deployer + LumoriaHook — the hook's permissions are encoded in the
  *                                 low 14 bits of its address, so it is deployed
  *                                 via CREATE2 with a salt mined off-chain.
- *   8. LumoriaLiquidityVault(poolManager, database)
+ *   8. LumoriaLiquidityVault(poolManager, database, legacyVault)
  *   8b. VestingVault(database)  — shared singleton custodying vested creator allocations
  *   9. LumoriaSwapRouter(poolManager, database)
  *  10. Generator(database)
@@ -153,7 +153,13 @@ async function main() {
 
     // ── 8-10. Vault + Router + Generator ──────────────────────────
     console.log("\nDeploying vault, vesting vault, router, generator...");
-    const vault = await deployContract("LumoriaLiquidityVault", [poolManagerAddr, databaseAddr]);
+    // Fresh deployments have no historical vault to aggregate. Upgrade/cutover
+    // deployments must pass the currently configured vault instead.
+    const vault = await deployContract("LumoriaLiquidityVault", [
+        poolManagerAddr,
+        databaseAddr,
+        hre.ethers.ZeroAddress,
+    ]);
     const vestingVault = await deployContract("VestingVault", [databaseAddr]);
     const router = await deployContract("LumoriaSwapRouter", [poolManagerAddr, databaseAddr]);
     const generator = await deployContract("Generator", [databaseAddr]);
@@ -230,6 +236,9 @@ async function main() {
             rebateContract:  await rebate.getAddress(),
             hook:            hookAddr,
             liquidityVault:  await vault.getAddress(),
+            // Signals Vault V2 constructor shape to verification/indexing
+            // tooling. Fresh deployments aggregate no historical vault.
+            legacyLiquidityVault: hre.ethers.ZeroAddress,
             vestingVault:    await vestingVault.getAddress(),
             router:          await router.getAddress(),
             generator:       await generator.getAddress(),

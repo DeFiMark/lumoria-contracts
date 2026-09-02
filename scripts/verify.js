@@ -60,7 +60,17 @@ async function main() {
     verify(core.rebateContract, [core.database]);
     verify(core.create2Deployer, []);
     verify(core.hook, [v4.poolManager, core.database], "contracts/v4/LumoriaHook.sol:LumoriaHook");
-    verify(core.liquidityVault, [v4.poolManager, core.database], "contracts/v4/LumoriaLiquidityVault.sol:LumoriaLiquidityVault");
+    // Historical deployment manifests describe Vault V1 (two constructor
+    // args). New manifests include legacyLiquidityVault and therefore verify
+    // the Vault V2 three-argument deployment without breaking old verification.
+    const vaultArgs = Object.prototype.hasOwnProperty.call(core, "legacyLiquidityVault")
+        ? [v4.poolManager, core.database, core.legacyLiquidityVault]
+        : [v4.poolManager, core.database];
+    verify(
+        core.liquidityVault,
+        vaultArgs,
+        "contracts/v4/LumoriaLiquidityVault.sol:LumoriaLiquidityVault"
+    );
     verify(core.vestingVault, [core.database], "contracts/VestingVault.sol:VestingVault");
     verify(core.router, [v4.poolManager, core.database], "contracts/v4/LumoriaSwapRouter.sol:LumoriaSwapRouter");
     verify(core.generator, [core.database]);

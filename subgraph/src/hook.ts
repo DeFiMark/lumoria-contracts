@@ -15,6 +15,7 @@ import {
   updateCandles,
 } from "./helpers";
 import { recordPrizeTicket } from "./prize";
+import { clampSingleSidedMark } from "./singleSided";
 
 function isModule(addr: Address): boolean {
   if (addr.equals(ADDRESS_ZERO)) return false;
@@ -90,7 +91,8 @@ export function handleTokenSold(event: TokenSold): void {
   let moduleFlow = isModule(seller);
   let price = priceFrom(bnbOut, tokensIn);
   let sqrtPriceX96 = event.params.sqrtPriceX96;
-  let poolPrice = poolPriceBnbPerToken(sqrtPriceX96);
+  // Sells are the only direction that can leave a mode-2 position's range.
+  let poolPrice = poolPriceBnbPerToken(clampSingleSidedMark(token, sqrtPriceX96));
 
   let t = new Trade(eventId(event));
   t.token = tokenId;

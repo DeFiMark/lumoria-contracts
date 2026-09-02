@@ -110,16 +110,35 @@ Per-token clean ERC20 with TaxHandler holder tracking.
 **Key reads (direct RPC):**
 - Standard ERC20: `name()`, `symbol()`, `decimals()`, `totalSupply()`, `balanceOf(addr)`, `allowance(owner, spender)`.
 - `pair()`, `taxHandler()`, `creator()` → useful links for the token's dashboard page. **V4 note:** `pair()` returns the PoolManager address (the reserve-custody venue excluded from reward-share tracking); the tradable pool itself is identified by `poolId = keccak256(abi.encode(poolKey))` — see §2.9.
+- **Display metadata** — `contractURI()` (ERC-7572), `image()`, `logo()` (alias for `image()`), `socials()`. All four are set at launch and editable by the creator until renounce. See DESIGN §12.2.
 
 **Key writes:**
 - `transfer(to, amount)`, `transferFrom(from, to, amount)`, `approve(spender, amount)` — standard.
 - `burn(amount)` — user burns their own tokens (reduces `totalSupply`, updates share in TaxHandler).
+- `setImage(uri)`, `setSocials(json)`, `setContractURI(uri)` — creator-only. Each reverts `"Only creator"` for anyone else and `"Renounced"` once `TaxHandler.renounceManagement()` has run, because the token's `onlyCreator` modifier reads that flag. **Upload the new artwork/document to permanent storage first; these calls only move a pointer.**
 
 **Events to index in subgraph:**
 | Event | Fires when | Subgraph use |
 |---|---|---|
 | `Transfer(from, to, value)` | Every transfer (including mint-on-init and burn-to-zero) | Build `Holder` entity (balance per token, rank by balance), compute holder count |
 | `Approval(owner, spender, value)` | Allowance change | Usually ignored by the subgraph; read directly when needed |
+| `ImageUpdated(image)` | `setImage` | Patch `Token.image` |
+| `SocialsUpdated(socials)` | `setSocials` | Patch `Token.socials` |
+| `ContractURIUpdated()` | `setContractURI`, and once at launch if a URI was supplied | ERC-7572 carries **no arguments** — the handler must call `contractURI()` to read the new value |
+
+**⚠️ Launch-time metadata does NOT come from this contract.** The subgraph's
+`LumoriaToken` template is created by `Database.TokenRegistered` *inside the
+launch transaction*, and a dynamic data source cannot see events emitted
+earlier in that same transaction — so the `ContractURIUpdated` fired by
+`__init__` is invisible to it. Take launch values from
+`Generator.TokenMetadataInitialized` (§2.10) or by reading the token in
+`handleTokenRegistered`; these three handlers only carry post-launch edits.
+
+**⚠️ Metadata is unvalidated, creator-controlled input.** The contract stores
+whatever string it is given, exactly as it does for `name`/`symbol`. Any UI
+rendering `socials()` in an `href` or `image()` in a `src` MUST check the scheme
+on read — a `javascript:` URI written into a token's own storage is permanent
+stored XSS with no take-down path.
 
 **Subgraph-derived entities:**
 - `Holder { token, address, balance, firstSeen, lastSeen }`
@@ -497,7 +516,8 @@ Single-transaction project launch. Clones Token + TaxHandler + optional FlatCurv
 - **`predictTokenAddress(salt)`** → CREATE2-deterministic future token address. **Crucial for UIs:** use this to display the pending token's address in a confirmation screen and pre-cache subgraph queries before the tx lands.
 
 **Key writes:**
-- **`generateProject(name, symbol, buyFee, sellFee, modules[], launchMode, launchPayload, allocations[], salt)` payable** — the single-tx launch. Caller becomes the creator (owner of fee controls, recipient of whatever token remains after LP/presale and allocations).
+- **`generateProject(name, symbol, buyFee, sellFee, modules[], launchMode, launchPayload, allocations[], salt, metadata)` payable** — the single-tx launch. Caller becomes the creator (owner of fee controls, recipient of whatever token remains after LP/presale and allocations).
+  - **`metadata`** is `ILumoriaToken.Metadata { string image; string socials; string contractURI; }` — display metadata written straight into the token (DESIGN §12.2). It is the **last** parameter, after `salt`, so that adding it did not shift any pre-existing argument. Pass three empty strings to launch without artwork; nothing in the launch path validates or requires it, and the creator can set it later. **Upload to permanent storage BEFORE calling this** — the strings are pointers, and doing the upload inside a retry loop would write a fresh permanent copy on every attempt.
   - **`allocations`** is `AllocationData[]` where `AllocationData { address beneficiary; uint256 amount; uint64 cliff; uint64 duration; }`. Carved from the creator's remainder: `duration == 0` → immediate transfer to `beneficiary`; `duration > 0` → locked in the VestingVault (§2.13) on a linear+cliff schedule. `sum(amount)` must be ≤ the remainder (else revert `"Gen: alloc exceeds remainder"`); max **100** allocations. Pass `[]` for none. This is the on-chain backing for the Create "carve % to Dev/Marketing/Treasury, optional lock" UI — `isLocked` is now real and enforced.
 
 **Launch modes and their payloads:**
@@ -510,6 +530,7 @@ Single-transaction project launch. Clones Token + TaxHandler + optional FlatCurv
 | Event | Fires when | Subgraph use |
 |---|---|---|
 | `ProjectGenerated(token, taxHandler, creator, name, symbol, buyFee, sellFee, launchMode)` | Every launch | Primary token-creation event; creates the `Token` entity and links to creator |
+| `TokenMetadataInitialized(token, image, socials, contractURI)` | Every launch | Seeds `Token.image` / `.socials` / `.metadataURI`. **The only reliable launch-time source** — the token's own metadata events are emitted before the subgraph's token template exists (§2.2) |
 | `BYOLLaunched(token, tokensForLP, bnbForLP)` | BYOL branch | LP-seeding record (launch-fee context comes from `FeeReceiver.LaunchFeeReceived`) |
 | `FlatCurveLaunched(token, flatCurve, hardCap)` | FLAT_CURVE branch | Links the token to its raise contract; seed a `Raise` entity |
 | `AllocationMinted(token, beneficiary, amount)` | An `allocations` entry with `duration == 0` | Immediate (unlocked) allocation → a `TokenAllocation` row (locked=false) |
@@ -517,11 +538,12 @@ Single-transaction project launch. Clones Token + TaxHandler + optional FlatCurv
 
 **UI surfaces:**
 - **Launch wizard (creator-facing)**:
-  1. User enters name, symbol, fees, modules (visual builder maps to `ModuleInitData[]`).
+  1. User enters name, symbol, artwork, description, links, fees, modules (visual builder maps to `ModuleInitData[]`).
   2. Picks launch mode; mode-specific form opens.
   3. Client generates a random `salt`, calls `predictTokenAddress(salt)` to preview the future token address.
   4. Builds the launch payload via `abi.encode` (helpers in `test/fixtures/deploy.js` mirror what the UI should do).
-  5. Submits `generateProject` — `msg.value` MUST include the flat launch fee (`Database.launchFeeBnb()`, read live): BYOL sends `launchFee + LP BNB`; FLAT_CURVE sends exactly `launchFee`.
+  5. **Uploads the artwork + ERC-7572 document to permanent storage** and takes the two URIs into `metadata`. Once, before anything is signed: the write is irreversible, so it should fail while the user has spent nothing — and a failure must degrade to "launch without artwork", never block a paid launch.
+  6. Submits `generateProject` — `msg.value` MUST include the flat launch fee (`Database.launchFeeBnb()`, read live): BYOL sends `launchFee + LP BNB`; FLAT_CURVE sends exactly `launchFee`.
 - **Post-launch confirmation**: show `ProjectGenerated` + launch-mode event, link to the token page (and FlatCurve page if applicable).
 
 **⚠️ Salt management**: `salt` must be unique per launch (CREATE2 reuses would fail). Recommend the UI derive salt from `keccak256(creator ++ block.timestamp ++ random)` client-side. Users who want a vanity address can grind the salt offline and submit.
@@ -682,6 +704,44 @@ Generator single-tx: creator supplies tokens + BNB, Generator creates Token + Ta
 ### 3.8 Launch flow — FlatCurve
 
 Contributors see a raise page with hardCap, min/max, soft countdown. Contribute → 1% platform fee skimmed, 99% credited. Refund available until raise completes. On fill: V4 pool initialized + liquidity vault-locked, creator BNB share paid, tokens claimable.
+
+### 3.9 Launch flow — Permanent Single-Sided
+
+Mode `2` encodes exactly one aligned `int24 startTick` and sends exactly
+`Database.launchFeeBnb()`. The creator-facing form uses starting FDV in BNB (or
+BNB/token price) and previews the exact tick-rounded result after inverting to
+the pool's token/BNB orientation. It must disclose 100% permanent supply
+commitment, zero initial BNB, no creator allocation, and no
+graduation/migration/withdrawal.
+
+Every launch-mode conditional is explicit. Mode 2 hides allocation, presale,
+BYOL seed, and LiquidityModule controls while retaining normal buy/sell, chart,
+fee, holder, and compatible module surfaces. The feature remains disabled until
+deployed V2 addresses are supplied.
+
+**Start-tick bounds (direct read).** Before quoting, read
+`Generator.singleSidedStartTickBounds() → (int24 min, int24 max)` and clamp
+the FDV slider / validate the chosen tick against it; the constants in
+`single-sided-price.ts` are the wider TickMath window, not the product
+window. A lower tick is a higher FDV (`fdvBnb = 1e9 / 1.0001^tick`); the
+defaults are ticks `148_200..196_260` ≈ 366 BNB down to ≈ 3 BNB. The window
+is owner-tunable, so never hardcode it. Out-of-window launches revert with
+`"Gen: start tick out of bounds"`.
+
+| Event | Emitted by | Use |
+|---|---|---|
+| `SingleSidedStartTickBoundsUpdated(int24 minStartTick, int24 maxStartTick)` | Generator (constructor + `setSingleSidedStartTickBounds`) | Optional: subgraph/analytics history of the product window. Live reads should use the view. |
+
+**Post-launch LiquidityModule.** `proposeModuleAdd` for type 2 on a mode-2
+token succeeds (it is only a proposal), but `executeModuleChange` reverts with
+`"Single-sided token"`. Keep the control hidden and, if a pending add is
+visible in the manage view, label it as un-executable.
+
+**Price marks.** For single-sided tokens the subgraph clamps `lastPriceBnb`
+and candles to the starting price when a sell's reported `sqrtPriceX96`
+exceeds the launch value (empty-range zero-fill via a raw V4 router). If the
+client ever reads `slot0` directly for a mode-2 token, apply the same clamp
+against `SingleSidedLaunch.sqrtPriceX96`.
 
 ---
 

@@ -267,6 +267,14 @@ address public pair;            // V4 PoolManager — reserve-custody venue, exc
 address public taxHandler;      // this token's TaxHandler
 address public creator;         // token creator
 bool public initialized;
+
+// Display metadata (§12.2). APPENDED after the fields above — every token is
+// a fresh ERC-1167 clone, so appending is safe; reordering anything above is
+// not, because a `Database.setTokenMasterCopy` rotation must leave existing
+// tokens reading the same slots.
+string internal _image;         // artwork URI
+string internal _socials;       // one JSON string of links
+string internal _contractURI;   // ERC-7572 metadata document
 ```
 
 ### Holder Tracking
@@ -284,10 +292,33 @@ function _transferFrom(address sender, address recipient, uint256 amount) intern
 }
 ```
 
+### Display Metadata
+
+Read under three conventions so any indexer finds something it understands —
+full rationale in §12.2:
+
+```solidity
+function contractURI() external view returns (string memory);  // ERC-7572
+function image() external view returns (string memory);
+function logo() external view returns (string memory);         // alias for image()
+function socials() external view returns (string memory);
+
+function setContractURI(string calldata uri) external onlyCreator;
+function setImage(string calldata image_) external onlyCreator;
+function setSocials(string calldata socials_) external onlyCreator;
+```
+
+`onlyCreator` here is `msg.sender == creator` **AND**
+`!ITaxHandler(taxHandler).managementRenounced()` — so renouncing freezes the
+token's public identity together with its economics.
+
 ### Events
 ```
 event Transfer(address indexed from, address indexed to, uint256 value);
 event Approval(address indexed owner, address indexed spender, uint256 value);
+event ContractURIUpdated();            // ERC-7572 — no args by spec; re-read contractURI()
+event ImageUpdated(string image);
+event SocialsUpdated(string socials);
 ```
 
 ### Key Decisions
@@ -295,6 +326,7 @@ event Approval(address indexed owner, address indexed spender, uint256 value);
 - **No special transfer restrictions** — any address can transfer freely (curated enforcement is at the pool/hook level)
 - **Holder tracking via TaxHandler** — TaxHandler aggregates share data and passes to modules that need it
 - **Burn function** — allows burning tokens, updates shares
+- **Metadata is pointers, never bytes** — the artwork and the ERC-7572 document live on Arweave; the token stores URIs. No `description` on chain (§12.2)
 
 ---
 
@@ -1133,7 +1165,8 @@ function generateProject(
     LaunchMode launchMode,
     bytes calldata launchPayload,  // mode-specific config (encoded)
     AllocationData[] calldata allocations,  // creator allocations carved from the remainder
-    bytes32 salt
+    bytes32 salt,
+    ILumoriaToken.Metadata calldata metadata  // (image, socials, contractURI) — see §12.2
 ) external payable returns (address token, address taxHandler) {
     require(buyFee <= 9800 && sellFee <= 9800, "fee exceeds max");
     
@@ -1154,8 +1187,8 @@ function generateProject(
         buyFee, sellFee, modules
     );
     
-    // 5. Initialize Token
-    ILumoriaToken(token).__init__(name, symbol, pair, taxHandler, msg.sender);
+    // 5. Initialize Token (including its display metadata)
+    ILumoriaToken(token).__init__(name, symbol, pair, taxHandler, msg.sender, metadata);
     
     // 6. Register in database
     database.registerToken(token, msg.sender, taxHandler);
@@ -1179,8 +1212,59 @@ function generateProject(
     }
     
     emit ProjectGenerated(token, taxHandler, msg.sender, name, symbol, buyFee, sellFee, launchMode);
+    emit TokenMetadataInitialized(token, metadata.image, metadata.socials, metadata.contractURI);
 }
 ```
+
+### 12.2 Display Metadata
+
+A token nobody's indexer can read renders as a blank card with `$0` everywhere
+on every aggregator that isn't ours. So every launch carries display metadata,
+and the token exposes it under **three** conventions at once — no single one has
+won, and the cost of publishing all three is a few hundred bytes:
+
+```solidity
+struct Metadata {
+    string image;        // artwork URI — an https gateway URL, not ar:// or ipfs://
+    string socials;      // ONE JSON string: {"website":"…","twitter":"…","telegram":"…"}
+    string contractURI;  // ERC-7572 — a JSON document with name/symbol/description/image/socials
+}
+```
+
+| Reader | Surface |
+|---|---|
+| ERC-7572 | `contractURI()` + `event ContractURIUpdated()` (no args, by spec — indexers re-read) |
+| Launchpad convention | `image()` / `logo()` (alias) / `socials()` — what most token scanners probe first |
+| Log-only indexers | `Generator.TokenMetadataInitialized(token, image, socials, contractURI)` |
+
+**`description` is deliberately NOT on chain.** It lives only in the
+`contractURI` JSON. It is the one metadata field that is both long (hundreds of
+bytes = tens of storage slots on every launch) and never read by an on-chain
+consumer, so storing it buys nothing the document does not already give.
+
+**Storage holds pointers, not bytes.** The payload lives on Arweave — paid once
+and endowed, rather than rented like pinned IPFS. A Lumoria token is immutable
+and its liquidity is permanently locked; artwork that disappears when a bill
+lapses would make "permanent" a promise with an asterisk.
+
+**Mutability.** `setImage` / `setSocials` / `setContractURI` are `onlyCreator`
+on the token, and that modifier *also* requires
+`!TaxHandler.managementRenounced()`. Renouncing therefore freezes a token's
+public identity along with its economics — otherwise a "locked" token's artwork
+and links would still be repointable, and the lock would be a half-truth.
+
+**Why the Generator emits the launch event and the token does not.** The
+subgraph's `LumoriaToken` template is spawned by `Database.TokenRegistered`
+*during the launch transaction*, and a dynamic data source cannot observe events
+emitted earlier in that same transaction. The Generator is a static data source
+indexed from the first block, so its event always lands. (`__init__` does emit
+the bare ERC-7572 `ContractURIUpdated()` for the benefit of third-party
+log-scanners, which have no such ordering constraint.)
+
+**`metadata` is the LAST parameter of `generateProject`**, after `salt`. It was
+appended rather than inserted so every pre-existing argument kept its position:
+an integrator who misses the new parameter gets a clean ABI mismatch instead of
+a silently shifted `salt`.
 
 ### Creator Allocations + VestingVault
 
@@ -1261,6 +1345,12 @@ event ProjectGenerated(
     uint256 sellFee,
     uint8 launchMode
 );
+event TokenMetadataInitialized(
+    address indexed token,
+    string image,
+    string socials,
+    string contractURI
+);
 event FlatCurveLaunched(address indexed token, address indexed flatCurve, uint256 hardCap);
 event AllocationMinted(address indexed token, address indexed beneficiary, uint256 amount);
 event AllocationVested(address indexed token, address indexed beneficiary, uint256 indexed scheduleId, uint256 amount, uint64 cliff, uint64 duration);
@@ -1292,6 +1382,7 @@ event AllocationVested(address indexed token, address indexed beneficiary, uint2
 
 **Generator**:
 - `ProjectGenerated(token, taxHandler, creator, name, symbol, buyFee, sellFee, launchMode)`
+- `TokenMetadataInitialized(token, image, socials, contractURI)` — launch-time display metadata (§12.2). Emitted here, not by the token, because the subgraph's token template does not exist yet at that point in the tx.
 - `FlatCurveLaunched(token, flatCurve, hardCap)`
 - `AllocationMinted(token, beneficiary, amount)` — immediate (unlocked) creator allocation
 - `AllocationVested(token, beneficiary, scheduleId, amount, cliff, duration)` — vested creator allocation (→ VestingVault schedule)
@@ -1299,6 +1390,8 @@ event AllocationVested(address indexed token, address indexed beneficiary, uint2
 **Token**:
 - `Transfer(from, to, value)`
 - `Approval(owner, spender, value)`
+- `ImageUpdated(image)` / `SocialsUpdated(socials)` — creator edits to display metadata (§12.2)
+- `ContractURIUpdated()` — ERC-7572; carries no args, so the handler must re-read `contractURI()`
 
 **LumoriaHook** (the subgraph's primary trade source — fires on EVERY swap, any router):
 - `TokenPurchased(token, buyer, bnbIn, platformFee, taxTaken, tokensOut, sqrtPriceX96, tick)` — `buyer = address(0)` for unattributed third-party routes. `sqrtPriceX96`/`tick` are the **post-swap pool mark**, making the hook a complete OHLC source (TOKENOMICS_V2 §13.1).
@@ -1471,3 +1564,49 @@ Recommended implementation sequence:
 - **FeeReceiver enhancements**: Revenue splitting, auto-conversion, buyback, etc.
 - **Governance**: Community voting on module additions, fee parameters
 - **Multi-chain**: Expand beyond BSC
+
+## 18. PERMANENT SINGLE-SIDED V4 LAUNCH (MODE 2)
+
+`SINGLE_SIDED = 2` is additive: `BYOL = 0` and `FLAT_CURVE = 1` keep their
+existing payloads, fees, events, allocation behavior, and state machines. The
+current metadata-extended `generateProject` ABI also remains unchanged.
+
+Mode 2 encodes `abi.encode(int24 startTick)`, pays exactly the flat launch fee,
+permits no creator allocations or initial LiquidityModule, and transfers the
+entire final supply to Vault V2. Vault V2 initializes the existing canonical
+native-BNB/token pool at `startTick` and creates one token-only
+`[MIN_USABLE_TICK, startTick]` position. Rounding dust is burned; zero BNB may
+be consumed. Later additions through the configured vault are rejected and the
+existing hook continues to prohibit all removal and donation paths.
+
+Vault V2 retains `addLiquidityLocked` and aggregates the old vault's analytics
+selectors with V2 additions, so rotating `Database.liquidityVault` does not
+zero historical token pages. The deployed hook, router, Database, token, and
+TaxHandler are unchanged. See
+[`PERMANENT_SINGLE_SIDED_LAUNCH.md`](./PERMANENT_SINGLE_SIDED_LAUNCH.md) for the
+complete invariants and trust disclosure.
+
+**Starting-price product bounds.** The vault only enforces TickMath-safe
+ticks. The Generator enforces the *product* window
+`singleSidedMinStartTick <= startTick <= singleSidedMaxStartTick`
+(`"Gen: start tick out of bounds"`), tunable by `Database.owner()` through
+`setSingleSidedStartTickBounds(min, max)` (both aligned to the 60 tick
+spacing, `min <= max`; emits `SingleSidedStartTickBoundsUpdated`). Because the
+pool price is token/BNB, a lower tick is a higher starting FDV:
+`startingFdvBnb = 1e9 / 1.0001^startTick`. Defaults:
+
+| Bound | Tick | Starting FDV | ≈ USD at ~$690/BNB |
+|---|---|---|---|
+| `DEFAULT_SINGLE_SIDED_MIN_START_TICK` | 148,200 | ≈ 366 BNB (max FDV) | ≈ $250k |
+| `DEFAULT_SINGLE_SIDED_MAX_START_TICK` | 196,260 | ≈ 3 BNB (min FDV) | ≈ $2k |
+
+No oracle is involved; the owner retunes the window as BNB's dollar price
+moves. Clients read `singleSidedStartTickBounds()` and never hardcode it.
+
+**Post-launch LiquidityModule.** A mode-2 token can never take more pool
+liquidity, so a LiquidityModule attached after launch would only strand BNB.
+The `LiquidityModule` master now refuses `__init__` when
+`Database.liquidityVault().isSingleSided(token)` is true
+(`"Single-sided token"`), closing the `proposeModuleAdd` path on-chain. A
+legacy vault without the selector is treated as "not single-sided", so the
+new master is safe to rotate before or after the vault cutover.

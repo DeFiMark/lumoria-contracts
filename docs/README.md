@@ -4,6 +4,8 @@ This folder contains everything needed to understand and continue building the L
 
 ## Read These First (in order)
 
+- [`PERMANENT_SINGLE_SIDED_LAUNCH.md`](./PERMANENT_SINGLE_SIDED_LAUNCH.md) — additive launch mode 2 architecture, invariants, rollout, and open product approvals.
+
 1. **[DESIGN.md](./DESIGN.md)** — The comprehensive system specification. What we're building, every contract, every event, all architectural decisions, security considerations. **Source of truth for the "what".**
 
 2. **[ROADMAP.md](./ROADMAP.md)** — The phased build plan. What's done, what's in progress, what's next. Includes detailed step-by-step implementation guide for the current phase. **Source of truth for "where we are".**
@@ -23,6 +25,8 @@ This folder contains everything needed to understand and continue building the L
 9. **[FRONTEND_MIGRATION_V2.md](./FRONTEND_MIGRATION_V2.md)** — **work order, not yet applied.** Every frontend-visible change from Tokenomics V2 Phase A: the breaking `CreatorFeeModule` accrue-and-pull ABI (a **Claim button must be built** — creator fees no longer arrive on their own), the new `minOut`/`deadline`/`operator` signatures on module keeper calls, and the changed launch-wizard init payloads. Includes a file-by-file map of `control-project-x-v0`. **Hand this to whoever picks up the frontend.**
 
 10. **[CONTRACTS_DRIFT_RESOLUTION.md](./CONTRACTS_DRIFT_RESOLUTION.md)** — the authoritative **answer-back** to the frontend team's drift audit ([`CONTRACTS_SUBGRAPH_DRIFT_REPORT.md`](./CONTRACTS_SUBGRAPH_DRIFT_REPORT.md)): what was **built** (vesting / allocations / renounce), what **already existed but was mis-documented** (multi-recipient fees, the timelock, the real reward flow, …), what's **cut**, and what's **off-chain**. **Self-contained — hand this back to the frontend team.**
+
+11. **[PERMANENT_SINGLE_SIDED_LAUNCH.md](./PERMANENT_SINGLE_SIDED_LAUNCH.md)** — **implementation-ready integration specification** for the additive third launch mode (`SINGLE_SIDED = 2`): one permanent token-only V4 position from the configured starting price toward effectively infinite token price, with no custom curve, graduation, or migration. Covers backward compatibility for BYOL/Flat Curve, Vault V2 and Generator V2, invariants, tests, frontend, subgraph, deployment cutover, rollback, and remaining product approvals.
 
 See also **[`../LAUNCH.md`](../LAUNCH.md)** at the repo root — the pre-mainnet launch checklist / working todo list.
 
@@ -51,6 +55,7 @@ lumoria-contracts/
 │   ├── TOKENOMICS_V2.md     ← SPEC: PrizePool (4) + MilestoneReward (5) + reward-by-default
 │   ├── MODULE_BUILD_HANDOFF.md  ← brief for the team building modules 4 + 5
 │   ├── FRONTEND_MIGRATION_V2.md ← work order for the UI repo (not yet applied)
+│   ├── PERMANENT_SINGLE_SIDED_LAUNCH.md ← additive third launch-mode integration plan
 │   └── FRONTEND_HANDOFF.md  ← frontend-agent brief: data inventory + drift audit
 ├── contracts/
 │   ├── Database.sol         ← central registry (Phase 1 ✅, V4 refs in Phase 5)

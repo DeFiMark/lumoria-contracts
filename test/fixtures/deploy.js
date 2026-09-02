@@ -15,7 +15,7 @@
 //   1. prepareTokenShells(base) → { token, taxHandler, tokenAddr, taxHandlerAddr }
 //        Deploys empty ERC-1167 clones, no init.
 //   2. Build module init payloads using taxHandlerAddr (helpers below).
-//   3. initializeToken(base, shells, { name, symbol, creator, pair, buyFee, sellFee, modules })
+//   3. initializeToken(base, shells, { name, symbol, creator, pair, buyFee, sellFee, modules, metadata? })
 //        Calls __init__ on TaxHandler (which clones + inits each module)
 //        and __init__ on the token, then registerToken on the Database.
 //
@@ -38,6 +38,25 @@ const { deployHookViaCreate2 } = require("../../scripts/lib/hook-miner");
 
 const ZERO = ethers.ZeroAddress;
 const coder = ethers.AbiCoder.defaultAbiCoder();
+
+// ─── Token display metadata (ILumoriaToken.Metadata) ───────────────
+//
+// `(string image, string socials, string contractURI)`. Launching with all
+// three empty is legal and is what most tests want — metadata never touches
+// supply, taxes, or any launch rule, so a test that isn't about metadata
+// should pass EMPTY_METADATA and stay unaffected by it.
+
+const EMPTY_METADATA = { image: "", socials: "", contractURI: "" };
+
+/** A populated metadata struct, for the tests that assert on it. */
+function sampleMetadata(overrides = {}) {
+    return {
+        image: "https://arweave.net/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        socials: '{"website":"https://lumoria.example","twitter":"https://x.com/lumoria"}',
+        contractURI: "https://arweave.net/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        ...overrides,
+    };
+}
 
 async function deployBase() {
     const [owner, feeRecipient, creator, user1, user2, user3, keeper, ...rest] =
@@ -103,7 +122,7 @@ async function deployBase() {
 
     // ── Vault + Router ───────────────────────────────────────────────
     const LumoriaLiquidityVault = await ethers.getContractFactory("LumoriaLiquidityVault");
-    const vault = await LumoriaLiquidityVault.deploy(poolManagerAddr, databaseAddr);
+    const vault = await LumoriaLiquidityVault.deploy(poolManagerAddr, databaseAddr, ZERO);
     await database.setLiquidityVault(await vault.getAddress());
 
     const LumoriaSwapRouter = await ethers.getContractFactory("LumoriaSwapRouter");
@@ -233,7 +252,13 @@ const CHANGE_TYPE = Object.freeze({
 const LAUNCH_MODE = Object.freeze({
     BYOL: 0,
     FLAT_CURVE: 1,
+    SINGLE_SIDED: 2,
 });
+
+/** abi.encode Permanent Single-Sided payload: (int24 startTick) */
+function encodeSingleSidedPayload(startTick) {
+    return coder.encode(["int24"], [startTick]);
+}
 
 /**
  * Deploy a raw ERC-1167 minimal proxy pointing at `implementation`.
@@ -321,12 +346,16 @@ async function initializeToken(base, shells, cfg) {
         cfg.modules,
     );
 
-    await shells.token.connect(owner).__init__(
+    // Returned so a test can assert on the events the token emits AT INIT
+    // (e.g. the ERC-7572 `ContractURIUpdated` announcement) — they are
+    // unreachable once the helper has swallowed the transaction.
+    const tokenInitTx = await shells.token.connect(owner).__init__(
         cfg.name,
         cfg.symbol,
         pair,
         shells.taxHandlerAddr,
         creatorAddr,
+        cfg.metadata || EMPTY_METADATA,
     );
 
     await base.database.connect(owner).registerToken(
@@ -334,6 +363,8 @@ async function initializeToken(base, shells, cfg) {
         creatorAddr,
         shells.taxHandlerAddr,
     );
+
+    return tokenInitTx;
 }
 
 /**
@@ -348,6 +379,7 @@ async function initializeToken(base, shells, cfg) {
  *   buyFee, sellFee,
  *   modules: ModuleInitData[] | (shells) => ModuleInitData[]
  *   initialLiquidity?: { tokens: bigint, bnb: bigint }
+ *   metadata?: ILumoriaToken.Metadata   // defaults to EMPTY_METADATA
  * }
  *
  * Returns { token, tokenAddr, taxHandler, taxHandlerAddr, poolId, pairAddr }.
@@ -371,6 +403,7 @@ async function launchTokenWithPool(base, cfg) {
         buyFee: cfg.buyFee ?? 500,
         sellFee: cfg.sellFee ?? 500,
         modules,
+        metadata: cfg.metadata,
     });
 
     if (cfg.initialLiquidity) {
@@ -496,6 +529,7 @@ module.exports = {
     useRealGenerator,
     encodeBYOLPayload,
     encodeFlatCurvePayload,
+    encodeSingleSidedPayload,
     buildCreatorFeeInitData,
     buildRewardInitData,
     buildBurnInitData,
@@ -503,6 +537,8 @@ module.exports = {
     buildMilestoneInitData,
     buildPrizePoolInitData,
     farDeadline,
+    EMPTY_METADATA,
+    sampleMetadata,
     MODULE_TYPE,
     CHANGE_TYPE,
     LAUNCH_MODE,

@@ -145,7 +145,7 @@ Operators are **platform-wide**, not part of any init payload: `database.setOper
 |---|---|---|---|
 | `Database.sol` | ✅ | ✅ | admin (incl. poolManager/hook/vault setters), registry, hook-gated volume (zero-user skip), master copies |
 | `FeeReceiver.sol` | ✅ | — | receive / receiveFee / receiveTradeFee / receiveLaunchFee / withdraw / setRecipient |
-| `LumoriaToken.sol` | ✅ | ✅ | init, transfer, approve/transferFrom, burn, setShare forwarding, **pair-exclusion** (pair = PoolManager) |
+| `LumoriaToken.sol` | ✅ | ✅ | init, transfer, approve/transferFrom, burn, setShare forwarding, **pair-exclusion** (pair = PoolManager), **display metadata (DESIGN §12.2): both read conventions, launch-time ERC-7572 announcement (and its absence when there is no URI), creator-only setters, renounce freeze** |
 | `TaxHandler.sol` | ✅ | ✅ | init, fee timelock (**incl. §7.6 pending-disarm regression + §7.7 per-change increase cap**), batch module proposals, distribution math, setShare, **renounceManagement freeze (B6)**, **share-exclusion set (V2 §7.3)**, **dust sweep skips 0-bps modules (V2 §7.5)** |
 | `CreatorFeeModule.sol` | ✅ | ✅ | init (taxHandler from msg.sender), **accrue-and-pull `receiveTax`/`withdraw` (V2 §7.2)**, recipient rotation keeps old accrual claimable, **regression: contract recipient with no `receive()` cannot brick trading** |
 | `RewardModule.sol` | ✅ | ✅ | BNB mode + token mode (external router = LumoriaSwapRouter over V4), **`donate()` (V2 §4.1)**, **`sync()` backfill (V2 §4.2)**, **regression: token-mode `receiveTax` never calls the external router (V2 §7.1)** |
@@ -158,7 +158,7 @@ Operators are **platform-wide**, not part of any init payload: `database.setOper
 | `v4/LumoriaLiquidityVault.sol` | ✅ | ✅ | router-only entry, lazy pool init at implied price, locked-liquidity growth, dust refunds (implicit in module flows) |
 | `v4/LumoriaSwapRouter.sol` | ✅ | ✅ | buy/sell exactIn, amountOutMin + deadline guards, addLiquidityETH delegation, non-Lumoria rejection |
 | `RebateContract.sol` | ✅ | ✅ | fund / topUp / credit / withdraw, silent-exit, re-activation (creditor = hook), **renounce freeze (Q1): rate/withdraw/re-fund blocked, top-up + credit stay open** |
-| `Generator.sol` | ✅ | ✅ | BYOL flow (V4 pool init + vault lock), FlatCurve wiring, predictTokenAddress, post-launch tradability, **creator allocations (B2): immediate + vested, over-allocation revert, FlatCurve path** |
+| `Generator.sol` | ✅ | ✅ | BYOL flow (V4 pool init + vault lock), FlatCurve wiring, predictTokenAddress, post-launch tradability, **creator allocations (B2): immediate + vested, over-allocation revert, FlatCurve path**, **display metadata: written into the token + logged as `TokenMetadataInitialized`, and an empty-metadata launch still succeeds and stays settable** |
 | `FlatCurve.sol` | ✅ | ✅ | contribute / refund / launch (success + fail, V4 pool seed) / claim / withdrawOnFailure |
 | `VestingVault.sol` | ✅ | ✅ | generator-gated `createSchedule` + validations, linear+cliff vesting math, `release` (full/partial/double), permissionless poke, beneficiary index |
 
@@ -171,7 +171,7 @@ Operators are **platform-wide**, not part of any init payload: `database.setOper
 
 ### Blocked — add tests once unblocked
 
-None currently. All Phase 1-5 contracts — plus the Phase-6 vesting/allocations/renounce work (incl. the rebate renounce-freeze), the Tokenomics-V2 Phase-A substrate changes, the entire Phase B (MilestoneRewardModule, randomness provider, PrizePool, operator settlement loop), the typed FeeReceiver interface (`receiveTradeFee`/`receiveLaunchFee` with hook/FlatCurve/Generator context), and the flat launch fee (`Database.launchFeeBnb` + both launch modes) — are under test (**298 tests green**).
+None currently. All Phase 1-5 contracts — plus the Phase-6 vesting/allocations/renounce work (incl. the rebate renounce-freeze), the Tokenomics-V2 Phase-A substrate changes, the entire Phase B (MilestoneRewardModule, randomness provider, PrizePool, operator settlement loop), the typed FeeReceiver interface (`receiveTradeFee`/`receiveLaunchFee` with hook/FlatCurve/Generator context), the flat launch fee (`Database.launchFeeBnb` + both launch modes), and the launch display metadata (DESIGN §12.2) — are under test (**307 tests green**).
 
 ---
 
@@ -240,3 +240,34 @@ If you intentionally skip tests (e.g. a gas-only refactor), note it in the PR de
 - **Ownable / ReentrancyGuard** — well-known library primitives, covered by integration tests exercising their modifiers.
 - **Cloneable assembly** — ERC-1167 is standard; the deployed clones are exercised through every launch.
 - **Pure gas benchmarks** — add with `hardhat-gas-reporter` later if we need to regression-protect a critical path.
+
+## Permanent Single-Sided verification
+
+The mode-2 suite covers explicit enum dispatch, exact launch-fee value,
+allocation/LiquidityModule rejection, fresh-pool and tick validation, zero-BNB
+seeding, full supply plus bounded burned dust, one-position enforcement,
+legacy analytics aggregation, first buy/sell price direction, and unchanged
+hook tax behavior. It also covers the Generator's owner-tunable product
+start-tick window (defaults, FDV at each bound derived from the initialized
+`sqrtPriceX96`, out-of-window rejection, owner-only/aligned/ordered setter,
+constructor event) and the `LiquidityModule` master's refusal to initialize
+for a single-sided token through the timelocked `proposeModuleAdd` →
+`executeModuleChange` path (with a BYOL control that still succeeds). The
+subgraph's empty-range price-mark clamp has no local harness (no matchstick);
+it is verified by the BSC subgraph build and the canary. The production-state rehearsal is environment-gated and must
+use the addresses in `deployments/bsc.json`; it must never invent replacements
+for the canonical PoolManager or deployed Lumoria infrastructure.
+
+Candidate operational commands (do not imply authorization to execute on
+mainnet):
+
+```text
+npm run deploy:v2:testnet
+npm run verify:v2:testnet
+npm run prepare-cutover:v2:testnet
+npm run smoke:v2:testnet
+```
+
+The candidate deploy script does not rotate Database pointers. The preparation
+script is read-only and prints reviewed setter calldata. The smoke script
+requires explicit approved tick and buy-size environment variables.

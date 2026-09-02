@@ -86,6 +86,15 @@ async function main() {
         byolPayload,
         [], // no creator allocations in the smoke test
         salt,
+        // Display metadata — the smoke launch exercises the real pipeline shape
+        // (an https gateway URL + a socials JSON string + an ERC-7572 URI)
+        // rather than three empty strings, so a metadata regression surfaces
+        // here and not in production.
+        {
+            image: "https://arweave.net/smoke-test-image-placeholder-000000000",
+            socials: '{"website":"https://lumoria.example"}',
+            contractURI: "https://arweave.net/smoke-test-metadata-placeholder-00",
+        },
         { value: liquidityBNB + launchFee },
     );
     const rcpt = await launchTx.wait();

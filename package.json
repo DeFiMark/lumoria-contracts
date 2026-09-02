@@ -12,10 +12,20 @@
     "deploy:local": "hardhat run scripts/deploy-base.js --network localhost",
     "deploy:testnet": "hardhat run scripts/deploy-base.js --network bscTestnet",
     "deploy:bsc": "hardhat run scripts/deploy-base.js --network bsc",
+    "deploy:v2:testnet": "hardhat run scripts/deploy-single-sided-v2.js --network bscTestnet",
+    "deploy:v2:bsc": "hardhat run scripts/deploy-single-sided-v2.js --network bsc",
     "smoke:local": "hardhat run scripts/smoke-launch.js --network localhost",
     "smoke:testnet": "hardhat run scripts/smoke-launch.js --network bscTestnet",
+    "smoke:v2:testnet": "hardhat run scripts/smoke-single-sided-v2.js --network bscTestnet",
+    "smoke:v2:bsc": "hardhat run scripts/smoke-single-sided-v2.js --network bsc",
     "verify:testnet": "hardhat run scripts/verify.js --network bscTestnet",
-    "verify:bsc": "hardhat run scripts/verify.js --network bsc"
+    "verify:bsc": "hardhat run scripts/verify.js --network bsc",
+    "verify:v2:testnet": "hardhat run scripts/verify-single-sided-v2.js --network bscTestnet",
+    "verify:v2:bsc": "hardhat run scripts/verify-single-sided-v2.js --network bsc",
+    "prepare-cutover:v2:testnet": "hardhat run scripts/prepare-single-sided-v2-cutover.js --network bscTestnet",
+    "prepare-cutover:v2:bsc": "hardhat run scripts/prepare-single-sided-v2-cutover.js --network bsc",
+    "cutover:v2:testnet": "hardhat run scripts/execute-single-sided-v2-cutover.js --network bscTestnet",
+    "cutover:v2:bsc": "hardhat run scripts/execute-single-sided-v2-cutover.js --network bsc"
   },
   "keywords": [
     "solidity",

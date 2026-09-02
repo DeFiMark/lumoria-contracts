@@ -1,6 +1,8 @@
 import {
   ProjectGenerated,
+  TokenMetadataInitialized,
   FlatCurveLaunched,
+  SingleSidedLaunched,
   AllocationMinted,
   AllocationVested,
 } from "../generated/Generator/Generator";
@@ -8,6 +10,10 @@ import { FlatCurve } from "../generated/Generator/FlatCurve";
 import { FlatCurve as FlatCurveTemplate } from "../generated/templates";
 import { Token, Raise, TokenAllocation } from "../generated/schema";
 import { ZERO_BI, eventId } from "./helpers";
+import {
+  getOrCreateSingleSidedLaunch,
+  setSingleSidedStartingPrice,
+} from "./singleSided";
 
 export function handleProjectGenerated(event: ProjectGenerated): void {
   let token = Token.load(event.params.token.toHexString());
@@ -15,6 +21,24 @@ export function handleProjectGenerated(event: ProjectGenerated): void {
   token.name = event.params.name;
   token.symbol = event.params.symbol;
   token.launchMode = event.params.launchMode;
+  token.save();
+}
+
+/**
+ * Launch-time display metadata, straight from the log.
+ *
+ * `handleTokenRegistered` already read the same three values off the token by
+ * eth_call earlier in this transaction; this handler exists because the log is
+ * the authoritative record of what the creator actually signed for, and it
+ * costs one entity write to be independent of an RPC that could have answered
+ * a `try_` call with a revert.
+ */
+export function handleTokenMetadataInitialized(event: TokenMetadataInitialized): void {
+  let token = Token.load(event.params.token.toHexString());
+  if (token == null) return; // bootstrap on TokenRegistered runs earlier in the tx
+  token.image = event.params.image;
+  token.socials = event.params.socials;
+  token.metadataURI = event.params.contractURI;
   token.save();
 }
 
@@ -57,6 +81,24 @@ export function handleFlatCurveLaunched(event: FlatCurveLaunched): void {
     token.launchMode = 1;
     token.save();
   }
+}
+
+export function handleSingleSidedLaunched(event: SingleSidedLaunched): void {
+  let token = Token.load(event.params.token.toHexString());
+  if (token == null) return;
+
+  let launch = getOrCreateSingleSidedLaunch(
+    token,
+    event.block.timestamp,
+    event.block.number
+  );
+  launch.tickUpper = event.params.startTick;
+  launch.tokenAmountCommitted = event.params.tokenAmountCommitted;
+  launch.liquidity = event.params.liquidity;
+  setSingleSidedStartingPrice(launch, token, event.params.sqrtPriceX96);
+
+  launch.save();
+  token.save();
 }
 
 export function handleAllocationMinted(event: AllocationMinted): void {

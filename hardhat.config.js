@@ -59,6 +59,12 @@ const networks = {
 if (DEPLOYER_PK) {
     networks.bsc = { url: BSC_RPC, accounts: [DEPLOYER_PK], chainId: 56 };
     networks.bscTestnet = { url: BSC_TESTNET_RPC, accounts: [DEPLOYER_PK], chainId: 97 };
+    // Rehearse owner-only operations (cutovers) against a `BSC_FORK=1` node
+    // with the REAL deployer/owner key signing — forked state already holds
+    // its mainnet balance. Opt-in so `deploy:local` keeps the node's accounts.
+    if (process.env.FORK_USE_DEPLOYER_PK === "1") {
+        networks.localhost.accounts = [DEPLOYER_PK];
+    }
 }
 
 /** @type import('hardhat/config').HardhatUserConfig */

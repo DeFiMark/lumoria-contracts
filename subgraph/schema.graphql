@@ -10,7 +10,23 @@ type Token @entity {
   name: String!
   symbol: String!
   decimals: Int!
-  launchMode: Int! # 0 BYOL, 1 FlatCurve
+  # ─── Display metadata (ILumoriaToken.Metadata) ───────────────────
+  # Seeded from Generator.TokenMetadataInitialized at launch, then kept
+  # current by the token's own ImageUpdated / SocialsUpdated /
+  # ContractURIUpdated events. Always URIs or JSON strings, never bytes —
+  # the payload lives on permanent content-addressed storage.
+  #
+  # Empty string, not null, when a token launched without artwork: the
+  # field is always known, it is the artwork that may not exist.
+  #
+  # There is no `description` here on purpose. It is carried only in the
+  # `metadataURI` JSON, which is immutable and cacheable forever, so the
+  # one surface that needs it (the token page) fetches it directly rather
+  # than every launch paying to store hundreds of bytes on chain.
+  image: String!
+  socials: String!
+  metadataURI: String!
+  launchMode: Int! # 0 BYOL, 1 FlatCurve, 2 Permanent Single-Sided
   launchedAt: BigInt!
   launchTx: Bytes!
   buyFee: BigInt! # current (FeesUpdated)
@@ -31,6 +47,7 @@ type Token @entity {
   pendingModuleChange: PendingChange
   rebate: Rebate
   raise: Raise
+  singleSidedLaunch: SingleSidedLaunch
   modules: [Module!]! @derivedFrom(field: "token")
   trades: [Trade!]! @derivedFrom(field: "token")
   holders: [Holder!]! @derivedFrom(field: "token")
@@ -38,6 +55,24 @@ type Token @entity {
   moduleHistory: [ModuleEvent!]! @derivedFrom(field: "token")
   allocations: [TokenAllocation!]! @derivedFrom(field: "token")
   vestingSchedules: [VestingSchedule!]! @derivedFrom(field: "token")
+}
+
+# Permanent single-sided V4 launch facts. The token address is the stable id,
+# making this a one-to-one extension of Token rather than a second token list.
+type SingleSidedLaunch @entity {
+  id: ID! # token address
+  token: Token!
+  poolId: Bytes!
+  tickLower: Int!
+  tickUpper: Int!
+  sqrtPriceX96: BigInt!
+  startingPriceBnbPerToken: BigDecimal!
+  startingFdvBnb: BigDecimal!
+  tokenAmountCommitted: BigInt!
+  liquidity: BigInt!
+  dustBurned: BigInt!
+  launchedAt: BigInt!
+  launchedAtBlock: BigInt!
 }
 
 # Creator allocations carved from the remainder at launch (Generator).

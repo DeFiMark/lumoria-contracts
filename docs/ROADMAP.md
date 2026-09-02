@@ -156,7 +156,7 @@ Closed the frontend drift audit (`docs/CONTRACTS_SUBGRAPH_DRIFT_REPORT.md`). Bui
 - ✅ **Reward-share exclusion** — `TaxHandler` caches `Database.vestingVault()` at init and skips it in `setShare`, so vested-but-unclaimed tokens never accrue stranded reflections. **`LumoriaToken` untouched.**
 - ✅ **Wiring** — `Database.vestingVault` + `setVestingVault`; deploy-base.js deploys/wires it (+ artifact); verify.js verifies it; fixture + smoke updated.
 
-**Documented-only (already shipped, was mis-described to the frontend):** multi-recipient fees via N CreatorFeeModules (B3), the 24h fee/module **timelock** (R1), the real `getUnpaidRewards` reward-claim flow (R2), module stats/burn countdowns (R3), the **continuous** reward model (B4), `minDistribution` semantics (B5), rebates vs referrals, per-user volume attribution, `predictTokenAddress`, V4Quoter/StateView quoting. **Cut:** loyalty tiers (B7), referrals (B8), PXX (B9). **Off-chain:** token metadata (B10). All resolved in `CONTRACTS_DRIFT_RESOLUTION.md`.
+**Documented-only (already shipped, was mis-described to the frontend):** multi-recipient fees via N CreatorFeeModules (B3), the 24h fee/module **timelock** (R1), the real `getUnpaidRewards` reward-claim flow (R2), module stats/burn countdowns (R3), the **continuous** reward model (B4), `minDistribution` semantics (B5), rebates vs referrals, per-user volume attribution, `predictTokenAddress`, V4Quoter/StateView quoting. **Cut:** loyalty tiers (B7), referrals (B8), PXX (B9). ~~**Off-chain:** token metadata (B10)~~ — **reversed in Phase 8**, see below. All resolved in `CONTRACTS_DRIFT_RESOLUTION.md`.
 
 **Verification:** 175 tests green (+28: VestingVault 11, allocations 7, renounce 6, rebate renounce-freeze 4). Deploy dry-run wires the vesting vault end-to-end.
 
@@ -198,6 +198,48 @@ Phase-A close.
   on-chain claim agree.
 
 ---
+
+## Phase 8 — Token Display Metadata ✅ COMPLETE
+
+**Reverses the Phase-6 "B10: token metadata is off-chain" call.** Off-chain-only
+metadata meant a Lumoria token was legible to Lumoria and to nobody else: every
+external scanner, wallet and aggregator would render it as a blank card with a
+letter avatar and `$0`, because there was nothing on chain for them to read and
+no reason for them to ask us. That is a launchpad-wide visibility problem, not a
+UI gap, so it belongs on chain. Full spec in **DESIGN §12.2**.
+
+**Contract changes (require a Generator + token master-copy redeploy — see `LAUNCH.md §1c`):**
+- ✅ **`ILumoriaToken.Metadata`** — `(string image, string socials, string contractURI)`, appended to `__init__`. No `description` on chain: it is the one metadata field that is long *and* never read on chain, so it lives in the ERC-7572 JSON only.
+- ✅ **`LumoriaToken` metadata layer** — storage appended after the v1 layout (safe: every token is a fresh clone); `contractURI()` (ERC-7572) + `image()` / `logo()` / `socials()` (launchpad convention) so no indexer has to know which convention we picked; `setImage` / `setSocials` / `setContractURI` gated on `msg.sender == creator` **and** `!TaxHandler.managementRenounced()`, so renounce freezes a token's public identity along with its economics.
+- ✅ **`Generator.generateProject` gains `metadata` as its LAST parameter** (after `salt`, so no pre-existing argument shifted) and emits **`TokenMetadataInitialized(token, image, socials, contractURI)`**. Emitted by the Generator rather than the token because the subgraph's `LumoriaToken` template is spawned mid-launch-tx and cannot see events fired before it existed (SUBGRAPH §3).
+
+**Subgraph:** `Token.image` / `.socials` / `.metadataURI`, seeded in `handleTokenRegistered` (call-hydrated alongside name/symbol) *and* from `TokenMetadataInitialized`, then kept current by the token template's three update handlers.
+
+**Frontend:** artwork re-encoded in the browser to a ~90KB square WebP, uploaded with the ERC-7572 document to **Arweave via ArDrive Turbo** before anything is signed; a storage failure degrades to "launch without artwork" and never blocks a paid launch. Creators edit it afterwards from the manage page. Reads are scheme-checked on every render — the strings are unvalidated creator input and go into `src`/`href`.
+
+**Verification:** 307 tests green (+7: LumoriaToken metadata 5, Generator metadata 2). Subgraph `codegen` + `build` pass.
+
+---
+
+## Phase 9 — Permanent Single-Sided V4 Launch (implementation; feature off)
+
+- Append launch mode 2 without changing mode 0 or 1.
+- Deploy new Generator and Vault candidates; reuse the canonical PoolManager,
+  hook, router, Database, token, and TaxHandler.
+- Gate public UI exposure behind a default-off feature flag.
+- Require local regression, subgraph codegen/build, frontend verification, a
+  production-state BSC fork rehearsal, security review, and a controlled canary
+  before enabling.
+- Ship owner-tunable starting-price/FDV bounds on Generator V2 with sensible
+  defaults (≈ 3 BNB to ≈ 366 BNB starting FDV); keep the final values,
+  rounding copy, canary parameters, and the infrastructure-rotation
+  disclosure as explicit product approvals.
+- Reject a post-launch LiquidityModule on-chain via a new `LiquidityModule`
+  master (third cutover call: `setModuleMasterCopy(2, ...)`); clamp
+  empty-range price marks for mode-2 tokens in the subgraph.
+
+No production deployment, Database rotation, Goldsky deployment, or frontend
+production enablement is part of the implementation worktree.
 
 ## Ongoing Tracks (every phase)
 

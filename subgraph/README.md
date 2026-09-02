@@ -9,12 +9,12 @@ truth for every event, entity, and indexing gotcha; this is its implementation.
 ```
 subgraph/
 ├── schema.graphql        ← all entities (docs/SUBGRAPH.md §6)
-├── subgraph.yaml         ← manifest: 7 singleton data sources + 7 templates
+├── subgraph.yaml         ← legacy sources plus deployed additive V2 sources
 ├── networks.json         ← addresses + startBlock (generated post-deploy)
 ├── abis/                 ← extracted from ../artifacts (generated)
 ├── scripts/
 │   ├── extract-abis.js   ← pulls ABIs out of the Hardhat artifacts
-│   └── gen-networks.js   ← builds networks.json from ../deployments/bsc.json
+│   └── gen-networks.js   ← builds networks.json and materializes deployed V2 sources
 └── src/
     ├── helpers.ts        ← shared getters / ids / candle + holder-day aggregation
     ├── database.ts       ← BOOTSTRAP: TokenRegistered → hydrate fees/modules/supply,
@@ -42,7 +42,8 @@ npm install
 
 # 1. Pull ABIs from ../artifacts (run `npx hardhat compile` in the parent first)
 #    and generate networks.json from ../deployments/bsc.json
-npm run prepare
+npm run extract-abis
+npm run gen-networks
 
 # 2. Codegen + build (validates schema + mappings against the ABIs)
 npm run codegen
@@ -54,6 +55,29 @@ npm run deploy:studio
 ```
 
 For a local Graph Node: `npm run create:local && npm run deploy:local`.
+
+### Additive V2 data sources
+
+The checked-in manifest keeps every legacy Generator and vault source active.
+`npm run gen-networks` additionally looks for
+`../deployments/<network>-single-sided-v2-candidate.json` with the following
+deployment-produced fields:
+
+```json
+{
+  "generatorV2": "0x...",
+  "vaultV2": "0x...",
+  "deploymentBlock": 123
+}
+```
+
+When all three fields exist, the script inserts separate `GeneratorV2` and
+`LumoriaLiquidityVaultV2` sources at that block and adds their coordinates to
+`networks.json`. When they do not exist, it leaves the active manifest
+legacy-only; it never invents or activates a zero-address source. CI or a
+rehearsal can override the file with `GENERATOR_V2_ADDRESS`,
+`LIQUIDITY_VAULT_V2_ADDRESS`, and `SINGLE_SIDED_START_BLOCK` (all three are
+required together).
 
 ## Status — validated (codegen + build green)
 
