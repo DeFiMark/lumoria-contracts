@@ -20,7 +20,8 @@ sources. Candidate manifest:
 | Generator V2 (modes 0/1/2 + metadata) | `0xBE9190d1C247964852b5817f26fb6927843D94a5` | start-tick window `[148200, 196260]` ≈ 366 → 3 BNB FDV, owner-tunable |
 | LiquidityModule master V2 (type 2) | `0x7AA2FCAf696279340BAbDf04d2b5a93a8621b649` | refuses `__init__` for single-sided tokens |
 | Deployment block (subgraph V2 start) | `119461440` | |
-| Subgraph | Goldsky `lumoria-bsc/1.1.0` (additive `GeneratorV2` + `LumoriaLiquidityVaultV2` sources) | frontend `NEXT_PUBLIC_SUBGRAPH_URL` must move to the 1.1.0 endpoint |
+| Subgraph | Goldsky `lumoria-bsc/1.1.0` — `https://api.goldsky.com/api/public/project_cmg2x3lrvy37d01vq4bsnbtig/subgraphs/lumoria-bsc/1.1.0/gn` (additive `GeneratorV2` + `LumoriaLiquidityVaultV2` sources) | deployed 2026-09-02; frontend `NEXT_PUBLIC_SUBGRAPH_URL` moved to it |
+| Canary (first mode-2 token) | `0x2418fd099953af530beC228693C2057A97780156` `LSSC` — launch tx `0x3d0873f4…ba52` | tick 196260 (≈ 3.0 BNB FDV), 5%/5% tax, 0.01 BNB buy + half sold back via `smoke:v2:bsc`; position `[-887220, 196260]`, dust burned 7,820 wei |
 
 Cutover = four owner calls in this order (script: `npm run cutover:v2:bsc`
 with `CONFIRM_V2_CUTOVER=YES`; read-only preview: `prepare-cutover:v2:bsc`):
