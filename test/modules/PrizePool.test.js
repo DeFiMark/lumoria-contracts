@@ -684,7 +684,7 @@ describe("PrizePool", function () {
             ).to.be.revertedWith("Bad proof");
         });
 
-        it("withheld randomness past the deadline rolls the epoch over instead of freezing it", async function () {
+        it("requested randomness cannot be discarded after the deadline", async function () {
             const base = await fixture();
             const l = await launchWithPrize(base, {
                 payoutMode: PAYOUT_MODE.LOTTERY, winnerCount: 3,
@@ -700,18 +700,17 @@ describe("PrizePool", function () {
             await l.prize.drawRandomness(0);
 
             await expect(l.prize.rolloverStaleRandomness(0))
-                .to.be.revertedWith("Deadline not reached");
+                .to.be.revertedWith("Randomness is committed");
             await time.increase(RANDOMNESS_DEADLINE);
 
             const liveEpoch = await l.prize.liveEpochId();
             await expect(l.prize.rolloverStaleRandomness(0))
-                .to.emit(l.prize, "PotRolledOver")
-                .withArgs(0, liveEpoch, E("9"), "randomness timeout");
+                .to.be.revertedWith("Randomness is committed");
 
-            // A late reveal can no longer resurrect the epoch.
+            // Late fulfillment uses the original committed draw.
             await expect(mock.fulfill(await l.prize.getAddress(), epochKey(0)))
-                .to.be.revertedWith("Rolled over");
-            expect(await l.prize.epochPot(liveEpoch)).to.equal(E("9"));
+                .to.emit(l.prize, "RandomnessFulfilled");
+            expect(await l.prize.epochPot(liveEpoch)).to.equal(0);
         });
     });
 

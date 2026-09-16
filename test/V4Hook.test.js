@@ -509,11 +509,11 @@ describe("V4: rebates + volume attribution via LumoriaSwapRouter", function () {
             buyFee: 500, sellFee: 500, recipient: base.signers.rest[11].address,
         });
 
-        // Creator funds a 50% rebate pool from their token allocation.
+        // Creator funds a 5% tax-adjusted rebate pool from their token allocation.
         const fund = ethers.parseEther("10000000"); // 10M tokens
         await token.connect(base.signers.owner).transfer(creator.address, fund);
         await token.connect(creator).approve(await base.rebate.getAddress(), fund);
-        await base.rebate.connect(creator).fundRebate(tokenAddr, fund, 5000);
+        await base.rebate.connect(creator).fundRebate(tokenAddr, fund, 500);
 
         const bnbIn = ethers.parseEther("1");
         const tx = await base.router.connect(user1).swapExactETHForTokensSupportingFeeOnTransferTokens(
@@ -526,8 +526,8 @@ describe("V4: rebates + volume attribution via LumoriaSwapRouter", function () {
             .find((parsed) => parsed && parsed.name === "TokenPurchased");
         const tokensOut = purchased.args[5];
 
-        // balance = swap output + 50% rebate bonus
-        expect(await token.balanceOf(user1.address)).to.equal(tokensOut + tokensOut / 2n);
+        // balance = swap output + 5% tax-adjusted rebate bonus
+        expect(await token.balanceOf(user1.address)).to.equal(tokensOut + tokensOut * 500n / 9500n);
         // per-user volume registered at the gross BNB amount
         expect(await base.database.userVolume(tokenAddr, user1.address)).to.equal(bnbIn);
         expect(await base.database.tokenVolume(tokenAddr)).to.be.gte(bnbIn);

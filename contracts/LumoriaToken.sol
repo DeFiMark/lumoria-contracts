@@ -213,7 +213,10 @@ contract LumoriaToken is LumoriaTokenData, ILumoriaToken {
 
     function _transferFrom(address sender, address recipient, uint256 amount) internal returns (bool) {
         require(recipient != address(0), "Zero recipient");
-        require(amount > 0, "Zero amount");
+        if (amount == 0) {
+            emit Transfer(sender, recipient, 0);
+            return true;
+        }
         require(_balances[sender] >= amount, "Insufficient balance");
 
         unchecked {

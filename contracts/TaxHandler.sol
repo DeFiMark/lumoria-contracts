@@ -31,6 +31,7 @@ import "./interfaces/ITaxHandler.sol";
 import "./interfaces/IModule.sol";
 import "./interfaces/IDatabase.sol";
 import "./interfaces/ILumoriaToken.sol";
+import "./interfaces/IFeeReceiver.sol";
 import "./lib/ReentrancyGuard.sol";
 
 contract TaxHandler is ITaxHandler, ReentrancyGuard {
@@ -139,6 +140,30 @@ contract TaxHandler is ITaxHandler, ReentrancyGuard {
     uint256 public totalBuyTaxReceived;
     uint256 public totalSellTaxReceived;
 
+    uint256 public sniperGuardStart;
+    uint256 public sniperGuardEnd;
+    event SniperGuardStarted(uint256 start, uint256 end, uint256 baseBuyFee);
+    event SniperOverageDistributed(uint256 totalTax, uint256 protocolAmount, uint256 projectAmount);
+
+    function startSniperGuard() external {
+        require(msg.sender == IDatabase(database).generator(), "Only generator");
+        require(sniperGuardStart == 0, "Guard already started");
+        require(_buyFee < 9000, "Guard base must be below 90%");
+        sniperGuardStart = block.timestamp;
+        sniperGuardEnd = block.timestamp + ((9000 - _buyFee + 499) / 500) * 30;
+        emit SniperGuardStarted(block.timestamp, sniperGuardEnd, _buyFee);
+    }
+
+    function baseBuyFee() external view returns (uint256) { return _buyFee; }
+
+    function sniperGuardActive() public view returns (bool) {
+        return sniperGuardStart != 0 && block.timestamp < sniperGuardEnd;
+    }
+
+    function launchGuardState() external view returns (uint256 chainTime, uint256 start, uint256 end, uint256 base, uint256 effective) {
+        return (block.timestamp, sniperGuardStart, sniperGuardEnd, _buyFee, buyFee());
+    }
+
     // ─── Modifiers ──────────────────────────────────────────────────
 
     modifier onlyCreator() {
@@ -212,9 +237,18 @@ contract TaxHandler is ITaxHandler, ReentrancyGuard {
     function receiveBuyTax() external payable override nonReentrant {
         require(msg.value > 0, "Zero tax");
         totalBuyTaxReceived += msg.value;
-        _distribute(msg.value, true);
+        uint256 protocolAmount;
+        if (sniperGuardActive()) {
+            uint256 effective = buyFee();
+            protocolAmount = (msg.value * (effective - _buyFee)) / (4 * effective);
+            if (protocolAmount != 0) {
+                IFeeReceiver(IDatabase(database).feeReceiver()).receiveFee{value: protocolAmount}(token);
+            }
+            emit SniperOverageDistributed(msg.value, protocolAmount, msg.value - protocolAmount);
+        }
+        _distribute(msg.value - protocolAmount, true);
         // Buyer unknown at this level — Router does not pass it through today.
-        emit BuyTaxDistributed(token, msg.value, address(0));
+        emit BuyTaxDistributed(token, msg.value - protocolAmount, address(0));
     }
 
     function receiveSellTax() external payable override nonReentrant {
@@ -351,6 +385,7 @@ contract TaxHandler is ITaxHandler, ReentrancyGuard {
     ///      supersedes the old one. See docs/TOKENOMICS_V2.md §7.6.
     function proposeFeeChange(uint256 newBuyFee, uint256 newSellFee) external override onlyCreator {
         require(!managementRenounced, "Renounced");
+        require(!sniperGuardActive() || newBuyFee == _buyFee, "Guard freezes buy fee");
         require(newBuyFee <= MAX_FEE && newSellFee <= MAX_FEE, "Fee exceeds max");
 
         // Instant-apply path: both fees are decreasing (or equal) — always good for holders.
@@ -388,6 +423,7 @@ contract TaxHandler is ITaxHandler, ReentrancyGuard {
         PendingFeeChange memory p = pendingFeeChange;
         require(p.pending, "No pending change");
         require(block.timestamp >= p.effectiveTime, "Timelock active");
+        require(!sniperGuardActive() || p.newBuyFee == _buyFee, "Guard freezes buy fee");
 
         uint256 oldBuy = _buyFee;
         uint256 oldSell = _sellFee;
@@ -711,7 +747,11 @@ contract TaxHandler is ITaxHandler, ReentrancyGuard {
 
     // ─── Views ──────────────────────────────────────────────────────
 
-    function buyFee() external view override returns (uint256) { return _buyFee; }
+    function buyFee() public view override returns (uint256) {
+        if (!sniperGuardActive()) return _buyFee;
+        uint256 stepped = 9000 - ((block.timestamp - sniperGuardStart) / 30) * 500;
+        return stepped > _buyFee ? stepped : _buyFee;
+    }
     function sellFee() external view override returns (uint256) { return _sellFee; }
     function shares(address holder) external view override returns (uint256) { return _shares[holder]; }
     function totalShares() external view override returns (uint256) { return _totalShares; }

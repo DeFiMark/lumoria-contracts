@@ -95,7 +95,7 @@ describe("LumoriaToken", function () {
             );
         });
 
-        it("rejects zero recipient and zero amount", async function () {
+        it("rejects zero recipient and emits zero-value transfers", async function () {
             const base = await loadFixture(deployBase);
             const { token } = await launchBasicToken(base);
             await expect(
@@ -103,7 +103,7 @@ describe("LumoriaToken", function () {
             ).to.be.revertedWith("Zero recipient");
             await expect(
                 token.transfer(base.signers.user1.address, 0),
-            ).to.be.revertedWith("Zero amount");
+            ).to.emit(token, "Transfer").withArgs(base.signers.owner.address, base.signers.user1.address, 0);
         });
 
         it("rejects insufficient balance", async function () {

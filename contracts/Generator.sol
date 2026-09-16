@@ -1,5 +1,6 @@
 //SPDX-License-Identifier: MIT
 pragma solidity 0.8.28;
+import "./interfaces/ILaunchGuard.sol";
 
 /**
     Lumoria Generator
@@ -224,7 +225,7 @@ contract Generator is IGenerator, ReentrancyGuard {
         AllocationData[] calldata allocations,
         ITaxHandler.ModuleInitData[] calldata modules
     ) internal {
-        require(payload.length == 32, "Gen: bad single-sided payload");
+        require(payload.length == 32 || payload.length == 64, "Gen: bad single-sided payload");
         require(allocations.length == 0, "Gen: allocations disabled");
 
         uint256 moduleCount = modules.length;
@@ -233,6 +234,10 @@ contract Generator is IGenerator, ReentrancyGuard {
         }
 
         int24 startTick = abi.decode(payload, (int24));
+        if (payload.length == 64) {
+            (, bool guard) = abi.decode(payload, (int24, bool));
+            if (guard) ILaunchGuard(database.tokenTaxHandler(token)).startSniperGuard();
+        }
         require(
             startTick >= singleSidedMinStartTick && startTick <= singleSidedMaxStartTick,
             "Gen: start tick out of bounds"
@@ -246,6 +251,8 @@ contract Generator is IGenerator, ReentrancyGuard {
 
         emit SingleSidedLaunched(token, startTick, sqrtPriceX96, tokenAmount, liquidity);
     }
+
+    function supportsSniperGuard() external pure returns (bool) { return true; }
 
     // ─── BYOL Launch ───────────────────────────────────────────────
 

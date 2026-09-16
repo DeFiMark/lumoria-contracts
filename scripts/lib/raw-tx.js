@@ -69,6 +69,7 @@ async function sendRaw(hre, { to, data, value = 0n }, opts = {}) {
     };
     const raw = await wallet.signTransaction(tx);
     const hash = await provider.send("eth_sendRawTransaction", [raw]);
+    if (opts.onBroadcast) await opts.onBroadcast(hash);
     const receipt = await waitForReceipt(hre, hash, opts);
     return { ...receipt, from, nonce: tx.nonce };
 }

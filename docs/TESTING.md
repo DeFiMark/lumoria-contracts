@@ -271,3 +271,50 @@ npm run smoke:v2:testnet
 The candidate deploy script does not rotate Database pointers. The preparation
 script is read-only and prints reviewed setter calldata. The smoke script
 requires explicit approved tick and buy-size environment variables.
+
+
+## Launch protection and verifiable randomness (2026-09 implementation)
+
+**September 16 VRF rollout:** full suite 333 passing, two gated fork tests
+skipped; seven targeted native-VRF tests subsequently pass including a new
+winning-claim/double-claim test (334 total non-fork cases). Real BSC coordinator
+fork rehearsal passes separately. Mainnet oracle canary fulfilled and delivered;
+unused reserve recovered into the verified production subscription before
+activation. Operator suite: 21 passing, including subscription funding alarms.
+See [NATIVE_VRF_MAINNET.md](./NATIVE_VRF_MAINNET.md) for evidence and scope.
+
+The launch-protection changes below remain locally verified, not deployed. Single-sided payloads retain the legacy
+32-byte tick encoding and optionally accept `(int24 startTick, bool sniperGuard)`.
+The new Generator advertises `supportsSniperGuard()`. An optional TaxHandler
+capability exposes baseBuyFee, sniperGuardStart, sniperGuardEnd and
+sniperGuardActive; buyFee remains the effective fee read by the existing hook.
+Guard starts atomically with launch, at 9000 bps, dropping 500 bps every 30s to
+the base fee. Base buy fee changes are frozen during the window; rebates pause.
+TaxHandler forwards floor(actualTax * (effective-base) / (4*effective)) to
+FeeReceiver; the rest follows existing buy allocations. Rounding favors the
+project by less than one wei relative to the proportional split. The ordinary
+platform fee stays unchanged. Existing pool IDs and hook remain unchanged.
+
+Rebate V2 exposes getRebateTerms(token) and previewRebate(token, received).
+Funding/rate updates cannot exceed the base buy fee; payout additionally caps
+the stored rate to the current base fee. Payout = floor(received * effectiveRate
+/ (10000-baseBuyFee)), capped to available funding. This is tax-adjusted output,
+not a reconstruction of the counterfactual AMM trade. Legacy handlers fall back
+to buyFee. Existing clone implementations cannot be upgraded in place.
+
+Project-prepaid native BNB VRF uses one subscription adapter, with isolated
+project credits and an immutable disclosed request charge. Randomness is stored
+before permissionless delivery; delivery retries reuse the same word. No
+cancellation or reroll after requesting. Production coordinator/subscription
+wiring and reserve funding require a separate verified rollout. Existing rebate
+balances and renounced pools require an explicit migration plan before rotating
+the global rebate pointer; never assume funds move with that pointer.
+
+Initial implementation validation: 332 contract tests passed; one environment-gated BSC fork test remained
+skipped. LaunchProtection covers step boundaries, uneven fee floor, freeze,
+renounce, actual swap routing, rebate pause and fee-decrease cap. NativeVRF
+covers native payment, credit withdrawal, request rollback, authentication,
+duplicate/out-of-order fulfillment and non-cancellation. Frontend production
+build and TypeScript pass; operator tests include pinned VRF delivery.
+Deployment/migration limitations and exact activation order are documented in
+[LAUNCH_PROTECTION_ROLLOUT.md](./LAUNCH_PROTECTION_ROLLOUT.md).

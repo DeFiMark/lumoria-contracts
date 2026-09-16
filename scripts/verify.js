@@ -74,7 +74,11 @@ async function main() {
     verify(core.vestingVault, [core.database], "contracts/VestingVault.sol:VestingVault");
     verify(core.router, [v4.poolManager, core.database], "contracts/v4/LumoriaSwapRouter.sol:LumoriaSwapRouter");
     verify(core.generator, [core.database]);
-    verify(core.randomnessProvider, [core.database], "contracts/TrustedOperatorRandomness.sol:TrustedOperatorRandomness");
+    if (dep.nativeVRF) {
+        verify(core.randomnessProvider, dep.nativeVRF.args, "contracts/NativeVRFRandomness.sol:NativeVRFRandomness");
+    } else {
+        verify(core.randomnessProvider, [core.database], "contracts/TrustedOperatorRandomness.sol:TrustedOperatorRandomness");
+    }
 
     // PoolManager: only ours to verify when we deployed it (bscTestnet).
     // On bsc mainnet the canonical Uniswap deployment is already verified.

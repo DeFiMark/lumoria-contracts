@@ -360,14 +360,15 @@ contract PrizePool is IModule, IRandomnessConsumer, ReentrancyGuard {
         emit RandomnessFulfilled(epochId, randomWord);
     }
 
-    /// @notice A withheld reveal must delay a prize, never freeze one: past the
-    ///         deadline anyone can roll the epoch over. Rolling over rather
-    ///         than falling back to a weak randomness source is deliberate.
+    /// @notice An unrequested draw can roll over after the funding deadline.
+    ///         Once requested, the original draw must complete; cancelling a
+    ///         delayed VRF result would allow selective outcome rejection.
     function rolloverStaleRandomness(uint256 epochId) external nonReentrant {
         require(payoutMode == LOTTERY, "Wrong mode");
         Settlement storage s = settlements[epochId];
         require(s.root != bytes32(0) && !s.rolledOver, "No root");
         require(!s.randomnessFulfilled, "Already fulfilled");
+        require(!s.randomnessRequested, "Randomness is committed");
         require(
             block.timestamp >= uint256(s.rootPostedAt) + RANDOMNESS_DEADLINE,
             "Deadline not reached"
@@ -565,6 +566,8 @@ contract PrizePool is IModule, IRandomnessConsumer, ReentrancyGuard {
         if (block.timestamp < currentEpochStart + len) return currentEpochId;
         return currentEpochId + (block.timestamp - currentEpochStart) / len;
     }
+
+    function supportsNonCancellableRandomness() external pure returns (bool) { return true; }
 
     function getModuleType() external pure override returns (uint8) {
         return MODULE_TYPE;

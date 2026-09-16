@@ -10,6 +10,7 @@ const {
 
 async function launch(base) {
     return launchTokenWithPair(base, {
+        buyFee: 2000,
         modules: (shells) => [{
             moduleType: MODULE_TYPE.CREATOR,
             buyAllocation: 10000,
@@ -51,7 +52,7 @@ describe("RebateContract", function () {
             await token.connect(base.signers.owner).transfer(base.signers.user1.address, ethers.parseEther("100"));
             await token.connect(base.signers.user1).approve(await base.rebate.getAddress(), ethers.MaxUint256);
             await expect(
-                base.rebate.connect(base.signers.user1).fundRebate(tokenAddr, ethers.parseEther("100"), 5000),
+                base.rebate.connect(base.signers.user1).fundRebate(tokenAddr, ethers.parseEther("100"), 1500),
             ).to.be.revertedWith("Rebate: only creator");
         });
 
@@ -59,7 +60,7 @@ describe("RebateContract", function () {
             const base = await loadFixture(deployBase);
             // user2.address is not a Lumoria token
             await expect(
-                base.rebate.connect(base.signers.creator).fundRebate(base.signers.user2.address, 100, 5000),
+                base.rebate.connect(base.signers.creator).fundRebate(base.signers.user2.address, 100, 1500),
             ).to.be.revertedWith("Rebate: not Lumoria token");
         });
 
@@ -67,7 +68,7 @@ describe("RebateContract", function () {
             const base = await loadFixture(deployBase);
             const { tokenAddr } = await launch(base);
             await expect(
-                base.rebate.connect(base.signers.creator).fundRebate(tokenAddr, 0, 5000),
+                base.rebate.connect(base.signers.creator).fundRebate(tokenAddr, 0, 1500),
             ).to.be.revertedWith("Rebate: zero amount");
             await expect(
                 base.rebate.connect(base.signers.creator).fundRebate(tokenAddr, 100, 0),
@@ -82,10 +83,10 @@ describe("RebateContract", function () {
             const { token, tokenAddr } = await launch(base);
             await token.connect(base.signers.owner).transfer(base.signers.creator.address, ethers.parseEther("1000"));
             await token.connect(base.signers.creator).approve(await base.rebate.getAddress(), ethers.MaxUint256);
-            await expect(base.rebate.connect(base.signers.creator).fundRebate(tokenAddr, ethers.parseEther("1000"), 5000))
+            await expect(base.rebate.connect(base.signers.creator).fundRebate(tokenAddr, ethers.parseEther("1000"), 1500))
                 .to.emit(base.rebate, "RebateFunded");
             const cfg = await base.rebate.getRebate(tokenAddr);
-            expect(cfg.rebateBps).to.equal(5000);
+            expect(cfg.rebateBps).to.equal(1500);
             expect(cfg.fundedBalance).to.equal(ethers.parseEther("1000"));
             expect(cfg.creator).to.equal(base.signers.creator.address);
             expect(cfg.active).to.equal(true);
@@ -107,7 +108,7 @@ describe("RebateContract", function () {
             const { creator, owner } = base.signers;
             await token.connect(owner).transfer(creator.address, ethers.parseEther("2000"));
             await token.connect(creator).approve(await base.rebate.getAddress(), ethers.MaxUint256);
-            await base.rebate.connect(creator).fundRebate(tokenAddr, ethers.parseEther("500"), 5000);
+            await base.rebate.connect(creator).fundRebate(tokenAddr, ethers.parseEther("500"), 1500);
             await base.rebate.connect(creator).withdrawFunds(tokenAddr, ethers.parseEther("500"));
             // Pool drained via withdraw → active should be false
             let cfg = await base.rebate.getRebate(tokenAddr);
@@ -147,15 +148,15 @@ describe("RebateContract", function () {
 
             await token.connect(owner).transfer(creator.address, ethers.parseEther("100"));
             await token.connect(creator).approve(await base.rebate.getAddress(), ethers.MaxUint256);
-            await base.rebate.connect(creator).fundRebate(tokenAddr, ethers.parseEther("100"), 5000);
+            await base.rebate.connect(creator).fundRebate(tokenAddr, ethers.parseEther("100"), 1500);
 
             // authorize user1 as creditor for this test
             await base.rebate.setAuthorizedCreditor(user1.address, true);
-            // buyer claims rebate on a 100-token buy → should get 50 tokens
+            // buyer claims rebate on a 100-token buy → should get 18.75 tax-adjusted tokens
             await expect(
                 base.rebate.connect(user1).creditRebate(tokenAddr, user2.address, ethers.parseEther("100")),
             ).to.emit(base.rebate, "RebateCredited");
-            expect(await token.balanceOf(user2.address)).to.equal(ethers.parseEther("50"));
+            expect(await token.balanceOf(user2.address)).to.equal(ethers.parseEther("18.75"));
 
             // Drain with a second massive credit
             await base.rebate.connect(user1).creditRebate(tokenAddr, user2.address, ethers.parseEther("1000000"));
@@ -172,10 +173,10 @@ describe("RebateContract", function () {
             const { creator, owner, user1 } = base.signers;
             await token.connect(owner).transfer(creator.address, ethers.parseEther("100"));
             await token.connect(creator).approve(await base.rebate.getAddress(), ethers.MaxUint256);
-            await base.rebate.connect(creator).fundRebate(tokenAddr, ethers.parseEther("100"), 5000);
+            await base.rebate.connect(creator).fundRebate(tokenAddr, ethers.parseEther("100"), 1500);
 
             await expect(
-                base.rebate.connect(user1).setRebateBps(tokenAddr, 7000),
+                base.rebate.connect(user1).setRebateBps(tokenAddr, 1800),
             ).to.be.revertedWith("Rebate: only creator");
             await expect(
                 base.rebate.connect(user1).withdrawFunds(tokenAddr, 100),
@@ -188,11 +189,11 @@ describe("RebateContract", function () {
             const { creator, owner } = base.signers;
             await token.connect(owner).transfer(creator.address, ethers.parseEther("100"));
             await token.connect(creator).approve(await base.rebate.getAddress(), ethers.MaxUint256);
-            await base.rebate.connect(creator).fundRebate(tokenAddr, ethers.parseEther("100"), 5000);
+            await base.rebate.connect(creator).fundRebate(tokenAddr, ethers.parseEther("100"), 1500);
 
-            await expect(base.rebate.connect(creator).setRebateBps(tokenAddr, 7000))
+            await expect(base.rebate.connect(creator).setRebateBps(tokenAddr, 1800))
                 .to.emit(base.rebate, "RebateBpsUpdated")
-                .withArgs(tokenAddr, 5000, 7000);
+                .withArgs(tokenAddr, 1500, 1800);
         });
     });
 
@@ -202,7 +203,7 @@ describe("RebateContract", function () {
             const { creator, owner } = base.signers;
             await launched.token.connect(owner).transfer(creator.address, ethers.parseEther("2000"));
             await launched.token.connect(creator).approve(await base.rebate.getAddress(), ethers.MaxUint256);
-            await base.rebate.connect(creator).fundRebate(launched.tokenAddr, ethers.parseEther("500"), 5000);
+            await base.rebate.connect(creator).fundRebate(launched.tokenAddr, ethers.parseEther("500"), 1500);
             return launched;
         }
 
@@ -220,11 +221,11 @@ describe("RebateContract", function () {
             const { creator } = base.signers;
             await launched.taxHandler.connect(creator).renounceManagement();
 
-            await expect(base.rebate.connect(creator).setRebateBps(launched.tokenAddr, 7000))
+            await expect(base.rebate.connect(creator).setRebateBps(launched.tokenAddr, 1800))
                 .to.be.revertedWith("Rebate: renounced");
             await expect(base.rebate.connect(creator).withdrawFunds(launched.tokenAddr, ethers.parseEther("100")))
                 .to.be.revertedWith("Rebate: renounced");
-            await expect(base.rebate.connect(creator).fundRebate(launched.tokenAddr, ethers.parseEther("100"), 6000))
+            await expect(base.rebate.connect(creator).fundRebate(launched.tokenAddr, ethers.parseEther("100"), 1600))
                 .to.be.revertedWith("Rebate: renounced");
         });
 
@@ -238,7 +239,7 @@ describe("RebateContract", function () {
                 .to.emit(base.rebate, "RebateToppedUp");
             const cfg = await base.rebate.getRebate(launched.tokenAddr);
             expect(cfg.fundedBalance).to.equal(ethers.parseEther("750"));
-            expect(cfg.rebateBps).to.equal(5000);
+            expect(cfg.rebateBps).to.equal(1500);
         });
 
         it("buyers are still credited after renounce (the pool keeps paying out)", async function () {
@@ -251,7 +252,7 @@ describe("RebateContract", function () {
             await expect(
                 base.rebate.connect(user1).creditRebate(launched.tokenAddr, user2.address, ethers.parseEther("100")),
             ).to.emit(base.rebate, "RebateCredited");
-            expect(await launched.token.balanceOf(user2.address)).to.equal(ethers.parseEther("50"));
+            expect(await launched.token.balanceOf(user2.address)).to.equal(ethers.parseEther("18.75"));
         });
     });
 });

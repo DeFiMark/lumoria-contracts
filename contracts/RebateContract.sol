@@ -17,9 +17,9 @@ pragma solidity 0.8.28;
     - **Silent exit** — if a rebate is inactive, empty, or the creator has
       withdrawn funds, creditRebate returns without reverting. A failing
       rebate must never block a trade.
-    - **Simple percentage** — buyer bought N tokens → gets (N * bps / 10000)
-      bonus tokens. No BNB conversion, no dynamic pricing. Creator just
-      tops up the pool.
+    - **Tax-adjusted output** — received * cappedRate / (10000 - baseBuyFee),
+      bounded by funding and disabled during launch protection. This does not
+      reconstruct the counterfactual untaxed AMM trade.
     - **Authorized creditors** — only whitelisted addresses (typically the
       Router) can credit. Admin can rotate.
     - **Re-activation** — a deactivated rebate (empty balance) reactivates
@@ -31,6 +31,8 @@ import "./interfaces/IRebate.sol";
 import "./interfaces/IERC20.sol";
 import "./interfaces/IDatabase.sol";
 import "./interfaces/ITaxHandler.sol";
+import "./interfaces/ILaunchGuard.sol";
+import {FullMath} from "@uniswap/v4-core/src/libraries/FullMath.sol";
 import "./lib/Ownable.sol";
 import "./lib/TransferHelper.sol";
 import "./lib/ReentrancyGuard.sol";
@@ -54,6 +56,34 @@ contract RebateContract is IRebate, Ownable, ReentrancyGuard {
 
     function getRebate(address token) external view returns (RebateConfig memory) {
         return rebates[token];
+    }
+
+    function getRebateTerms(address token) public view returns (uint256 baseBuyFee, uint256 effectiveRate, bool paused) {
+        address handler = database.tokenTaxHandler(token);
+        if (handler == address(0)) return (0, 0, false);
+        baseBuyFee = ITaxHandler(handler).buyFee();
+        // New handlers expose the launch guard; legacy handlers keep working.
+        try ILaunchGuard(handler).baseBuyFee() returns (uint256 base) {
+            baseBuyFee = base;
+            paused = ILaunchGuard(handler).sniperGuardActive();
+        } catch {}
+        if (paused || baseBuyFee >= BPS) return (baseBuyFee, 0, paused);
+        effectiveRate = rebates[token].rebateBps;
+        if (effectiveRate > baseBuyFee) effectiveRate = baseBuyFee;
+    }
+
+    function previewRebate(address token, uint256 received) public view returns (uint256 amount) {
+        RebateConfig storage cfg = rebates[token];
+        if (!cfg.active || cfg.fundedBalance == 0 || received == 0) return 0;
+        (uint256 base, uint256 rate,) = getRebateTerms(token);
+        if (rate == 0) return 0;
+        amount = FullMath.mulDiv(received, rate, BPS - base);
+        if (amount > cfg.fundedBalance) amount = cfg.fundedBalance;
+    }
+
+    function _requireRateCap(address token, uint256 rate) internal view {
+        (uint256 base,,) = getRebateTerms(token);
+        require(rate <= base, "Rebate: exceeds buy fee");
     }
 
     /// @notice True once the token's creator has permanently renounced
@@ -81,6 +111,8 @@ contract RebateContract is IRebate, Ownable, ReentrancyGuard {
         require(database.isLumoriaToken(token), "Rebate: not Lumoria token");
         require(msg.sender == database.tokenCreator(token), "Rebate: only creator");
         _requireNotRenounced(token);
+
+        _requireRateCap(token, rebateBps);
 
         RebateConfig storage cfg = rebates[token];
         // First funding or re-funding — set/rebind creator + rate.
@@ -122,6 +154,7 @@ contract RebateContract is IRebate, Ownable, ReentrancyGuard {
         RebateConfig storage cfg = rebates[token];
         require(msg.sender == cfg.creator, "Rebate: only creator");
         _requireNotRenounced(token);
+        _requireRateCap(token, rebateBps);
         uint256 old = cfg.rebateBps;
         cfg.rebateBps = rebateBps;
         emit RebateBpsUpdated(token, old, rebateBps);
@@ -144,14 +177,14 @@ contract RebateContract is IRebate, Ownable, ReentrancyGuard {
 
     /// @notice Credit a buyer with their rebate. Silent exit when the pool
     ///         is empty / inactive / unset — must never revert a trade.
-    function creditRebate(address token, address buyer, uint256 tokensBought) external override {
+    function creditRebate(address token, address buyer, uint256 tokensBought) external override nonReentrant {
         require(authorizedCreditors[msg.sender], "Rebate: unauthorized");
         if (tokensBought == 0) return;
 
         RebateConfig storage cfg = rebates[token];
         if (!cfg.active || cfg.fundedBalance == 0 || cfg.rebateBps == 0) return;
 
-        uint256 rebateAmount = (tokensBought * cfg.rebateBps) / BPS;
+        uint256 rebateAmount = previewRebate(token, tokensBought);
         if (rebateAmount == 0) return;
         if (rebateAmount > cfg.fundedBalance) {
             rebateAmount = cfg.fundedBalance;
