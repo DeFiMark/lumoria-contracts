@@ -173,3 +173,8 @@ Zero-value ERC20 transfer succeeded. Receipts and source/code hashes are in
 A production SSE candle was observed from the normal buy. That check exposed
 USD volume in Codex live bars; the market service now explicitly requests
 `volumeNativeToken`, matching native-BNB history.
+
+The corrected stream was verified with a further 0.00001 BNB canary buy: it
+delivered exactly 0.00000891 BNB candle volume (net of 1% platform fee and 10%
+buy tax), explicitly labeled volumeCurrency=BNB. The receipt is recorded as
+smokeNativeVolumeBuy. Total smoke buy input was 0.00121 BNB plus launch fee/gas.

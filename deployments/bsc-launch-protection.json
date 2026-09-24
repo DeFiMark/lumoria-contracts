@@ -163,6 +163,14 @@
       "blockNumber": 123657807,
       "gasUsed": 294269,
       "contractAddress": null
+    },
+    "smokeNativeVolumeBuy": {
+      "hash": "0x918020bdaf3f31f91aee5de0371231003aca85b2696763105f3f678749781b9e",
+      "blockNumber": 123658213,
+      "gasUsed": 309520,
+      "contractAddress": null,
+      "from": "0x7F062E13f09dbFf8CB0433F0E777470107113A74",
+      "nonce": 94
     }
   },
   "retiredTestTokens": [
@@ -190,7 +198,15 @@
     "salt": "0x9325b5d5dd27e6efbc2a2637cfbd7f9b784b3679c72d6b6959d4ac08b6952afb",
     "token": "0x053457E241F73AE58512Ab8eEa88c0f61C845907",
     "end": "1790208232",
-    "passedAt": "2026-09-24T00:04:11.596Z"
+    "passedAt": "2026-09-24T00:04:11.596Z",
+    "liveStreamVerified": {
+      "transaction": "0x918020bdaf3f31f91aee5de0371231003aca85b2696763105f3f678749781b9e",
+      "resolution": "5",
+      "volumeCurrency": "BNB",
+      "volume": "0.00000891",
+      "buyInputBNB": "0.00001",
+      "verifiedAt": "2026-09-24T00:08:29.802Z"
+    }
   },
   "smokePassed": true
 }
