@@ -182,6 +182,24 @@ fs.writeFileSync(
   path.join(__dirname, "..", "networks.json"),
   JSON.stringify(networks, null, 2)
 );
+// Keep historical Generators while indexing the active launch-protection factory.
+// Copy the ABI-compatible mapping, not the old factory address/start block.
+if (dep.launchProtection) {
+  const candidate = dep.launchProtection.contracts.Generator;
+  networks[graphNetwork].GeneratorLaunchProtection = { address: candidate.address, startBlock: candidate.block };
+  manifest = fs.readFileSync(manifestFile, "utf8");
+  manifest = manifest.replace(/  # BEGIN LAUNCH PROTECTION\r?\n[\s\S]*?  # END LAUNCH PROTECTION\r?\n/g, "");
+  // graph build serializes YAML and removes comments, so also remove by name.
+  manifest = manifest.replace(/  - kind: ethereum\r?\n    name: GeneratorLaunchProtection\r?\n[\s\S]*?(?=  - kind: ethereum|templates:)/g, "");
+  const source = manifest.match(/  - kind: ethereum\r?\n    name: GeneratorV2\r?\n[\s\S]*?(?=  - kind: ethereum)/);
+  if (!source) throw new Error("Missing GeneratorV2 mapping to extend");
+  const addition = source[0].replace('name: GeneratorV2', 'name: GeneratorLaunchProtection')
+    .replace(/address: "[^"]+"/, `address: "${candidate.address}"`)
+    .replace(/startBlock: \d+/, `startBlock: ${candidate.block}`);
+  manifest = manifest.replace(/dataSources:\r?\n/, `dataSources:\n  # BEGIN LAUNCH PROTECTION\n${addition}  # END LAUNCH PROTECTION\n`);
+  fs.writeFileSync(manifestFile, manifest);
+  fs.writeFileSync(path.join(__dirname, "..", "networks.json"), JSON.stringify(networks, null, 2));
+}
 console.log(`Wrote networks.json for "${graphNetwork}" (startBlock ${sb}).`);
 console.log("Note: subgraph.yaml uses `network: bsc`. For testnet, also switch the");
 console.log("network fields to `chapel` (or run codegen with a testnet manifest).");

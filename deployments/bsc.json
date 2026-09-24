@@ -9,12 +9,12 @@
   "core": {
     "database": "0x9af6a42a78Fe4Ec3c7eFDFF3a2D52ecb5aad0d47",
     "feeReceiver": "0xaEdF41a52eF535267f6516C91998119a028555af",
-    "rebateContract": "0x7fFfDbdD4eD1b6D635Fe66a73862d80b37b02718",
+    "rebateContract": "0xF3229A09FAb53834a5695FF03a5E8701C6580eB0",
     "hook": "0x0C2fCddDbcd5ae744F1ef26D9e09F4338533Eaec",
     "liquidityVault": "0x0fD6C47b9218a127D786d2dD0299712d34eD6d75",
     "vestingVault": "0x7fdCa82323b77C7fb11a674F4b75782Fb1bd5d53",
     "router": "0x3C973aF48d54429A55E74E3E8eEC42eC886925A8",
-    "generator": "0xBE9190d1C247964852b5817f26fb6927843D94a5",
+    "generator": "0x67C1Eef556D0789a0e24893022a0E61b611a2Da2",
     "create2Deployer": "0xd9377878F74273A81f9313cbE98BD8339809281B",
     "randomnessProvider": "0xf0eBe3E3bC668361145335aB7746C7b0eF5e984b"
   },
@@ -29,8 +29,8 @@
     "permit2": "0x000000000022D473030F116dDEE9F6B43aC78BA3"
   },
   "masterCopies": {
-    "token": "0x472CDE197a6bD37D7EA77d388FFC9Eb0cBaaDC53",
-    "taxHandler": "0x7d7D34618b81dB957EE7DfBea860Cc1c0d0663F9",
+    "token": "0xab1F77FE3504FE0d716a704061319bCa69977b26",
+    "taxHandler": "0x1BC9bf51a0b8850d1dC25a3d4d5Cd18A6fb55f75",
     "flatCurve": "0xCEBf6612c34ce6A3850344C54AFe40D052d78E7e",
     "creatorFee": "0xdd57e227cc4136f8c7aa7b555959Df784D334D4D",
     "reward": "0x82b75c622B225104ba9AEdF3294B779dD097C599",
@@ -61,6 +61,12 @@
     "nativeVRF": {
       "provider": "0xc0Dba880FaECEA0187C0e4478282fB3d7A1a28b1",
       "prizeMaster": "0xc53D1dA4c98C837d2b43EDDDC2E9933c92dCACbb"
+    },
+    "launchProtection": {
+      "generator": "0xBE9190d1C247964852b5817f26fb6927843D94a5",
+      "rebateContract": "0x7fFfDbdD4eD1b6D635Fe66a73862d80b37b02718",
+      "token": "0x472CDE197a6bD37D7EA77d388FFC9Eb0cBaaDC53",
+      "taxHandler": "0x7d7D34618b81dB957EE7DfBea860Cc1c0d0663F9"
     }
   },
   "singleSidedV2": {
@@ -219,5 +225,48 @@
         "contractAddress": null
       }
     }
+  },
+  "launchProtection": {
+    "activatedAt": "2026-09-23T23:56:47.057Z",
+    "contracts": {
+      "LumoriaToken": {
+        "address": "0xab1F77FE3504FE0d716a704061319bCa69977b26",
+        "args": [],
+        "block": 123653637,
+        "codeHash": "0xdfc377f9f39149742cac4b372fc7c956b1bd15f1df212661deba79203a44f177"
+      },
+      "TaxHandler": {
+        "address": "0x1BC9bf51a0b8850d1dC25a3d4d5Cd18A6fb55f75",
+        "args": [],
+        "block": 123653646,
+        "codeHash": "0x6f329a4b78952dcb2e2146a6366603b719271580708564f41505ea78d415f501"
+      },
+      "RebateContract": {
+        "address": "0xF3229A09FAb53834a5695FF03a5E8701C6580eB0",
+        "args": [
+          "0x9af6a42a78Fe4Ec3c7eFDFF3a2D52ecb5aad0d47"
+        ],
+        "block": 123653654,
+        "codeHash": "0x1070bd1606e2df44a1a177403705e6abb81972f865e4d6f9e6f13524e0b1e031"
+      },
+      "Generator": {
+        "address": "0x67C1Eef556D0789a0e24893022a0E61b611a2Da2",
+        "args": [
+          "0x9af6a42a78Fe4Ec3c7eFDFF3a2D52ecb5aad0d47"
+        ],
+        "block": 123653662,
+        "codeHash": "0xa6743b2eadfc680678a14724cc0edb6fd7f35e3dd5306596dc79eb777ab81302"
+      }
+    },
+    "retiredTestTokens": [
+      "0xd22E404B57EA8Df3Fa14DaeD18ED26aeA8D65D37",
+      "0x6C9f1746BBF1cf91db72341D615dA75e1900041a",
+      "0xE109A630cef96AF7aC6a2D68B066c9A95ed69c49",
+      "0x2418fd099953af530beC228693C2057A97780156",
+      "0x54e384a2c3A24d92f5422F3BF0B00e13c95C39cF",
+      "0x9A40ed9708CB1616Fe9DDE1D4849f7476576811A"
+    ],
+    "activationBlock": 123656819,
+    "journal": "bsc-launch-protection.json"
   }
 }

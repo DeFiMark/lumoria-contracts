@@ -68,6 +68,9 @@ async function sendRaw(hre, { to, data, value = 0n }, opts = {}) {
         value,
     };
     const raw = await wallet.signTransaction(tx);
+    // Persist the deterministic hash before broadcasting so an uncertain RPC
+    // response cannot cause a rollout to send the same logical operation twice.
+    if (opts.onSigned) await opts.onSigned(hre.ethers.keccak256(raw));
     const hash = await provider.send("eth_sendRawTransaction", [raw]);
     if (opts.onBroadcast) await opts.onBroadcast(hash);
     const receipt = await waitForReceipt(hre, hash, opts);

@@ -21,6 +21,9 @@ export function handleProjectGenerated(event: ProjectGenerated): void {
   token.name = event.params.name;
   token.symbol = event.params.symbol;
   token.launchMode = event.params.launchMode;
+  // Store configured fees; temporary guard fees must not become stale at 90%.
+  token.buyFee = event.params.buyFee;
+  token.sellFee = event.params.sellFee;
   token.save();
 }
 

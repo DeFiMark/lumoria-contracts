@@ -275,6 +275,9 @@ requires explicit approved tick and buy-size environment variables.
 
 ## Launch protection and verifiable randomness (2026-09 implementation)
 
+**September 23 rollout:** All four replacements are verified on BscScan and active on mainnet. The production-state fork rehearsal passed launch, fee split, rebate pause/expiry/cap, zero transfer and sell using the existing hook/router/vault. The six former projects are disposable tests per the owner; no balance or clone migration was required. Subgraph 1.2.0 indexes the new Generator and guard events. The mainnet guarded-launch/rebate/buy/sell smoke also passed. See [LAUNCH_PROTECTION_ROLLOUT.md](./LAUNCH_PROTECTION_ROLLOUT.md) and `deployments/bsc-launch-protection.json` for receipts and smoke results.
+
+
 **September 16 VRF rollout:** full suite 333 passing, two gated fork tests
 skipped; seven targeted native-VRF tests subsequently pass including a new
 winning-claim/double-claim test (334 total non-fork cases). Real BSC coordinator
@@ -283,7 +286,7 @@ unused reserve recovered into the verified production subscription before
 activation. Operator suite: 21 passing, including subscription funding alarms.
 See [NATIVE_VRF_MAINNET.md](./NATIVE_VRF_MAINNET.md) for evidence and scope.
 
-The launch-protection changes below remain locally verified, not deployed. Single-sided payloads retain the legacy
+The launch-protection changes below were activated on mainnet September 23. Single-sided payloads retain the legacy
 32-byte tick encoding and optionally accept `(int24 startTick, bool sniperGuard)`.
 The new Generator advertises `supportsSniperGuard()`. An optional TaxHandler
 capability exposes baseBuyFee, sniperGuardStart, sniperGuardEnd and

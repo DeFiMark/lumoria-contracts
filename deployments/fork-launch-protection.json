@@ -1,0 +1,195 @@
+{
+  "createdAt": "2026-09-23T23:32:19.923Z",
+  "database": "0x9af6a42a78Fe4Ec3c7eFDFF3a2D52ecb5aad0d47",
+  "previous": {
+    "generator": "0xBE9190d1C247964852b5817f26fb6927843D94a5",
+    "rebateContract": "0x7fFfDbdD4eD1b6D635Fe66a73862d80b37b02718",
+    "token": "0x472CDE197a6bD37D7EA77d388FFC9Eb0cBaaDC53",
+    "taxHandler": "0x7d7D34618b81dB957EE7DfBea860Cc1c0d0663F9"
+  },
+  "contracts": {
+    "LumoriaToken": {
+      "address": "0xab1F77FE3504FE0d716a704061319bCa69977b26",
+      "args": [],
+      "block": 123653437,
+      "codeHash": "0xdfc377f9f39149742cac4b372fc7c956b1bd15f1df212661deba79203a44f177"
+    },
+    "TaxHandler": {
+      "address": "0x1BC9bf51a0b8850d1dC25a3d4d5Cd18A6fb55f75",
+      "args": [],
+      "block": 123653438,
+      "codeHash": "0x6f329a4b78952dcb2e2146a6366603b719271580708564f41505ea78d415f501"
+    },
+    "RebateContract": {
+      "address": "0xF3229A09FAb53834a5695FF03a5E8701C6580eB0",
+      "args": [
+        "0x9af6a42a78Fe4Ec3c7eFDFF3a2D52ecb5aad0d47"
+      ],
+      "block": 123653439,
+      "codeHash": "0x1070bd1606e2df44a1a177403705e6abb81972f865e4d6f9e6f13524e0b1e031"
+    },
+    "Generator": {
+      "address": "0x67C1Eef556D0789a0e24893022a0E61b611a2Da2",
+      "args": [
+        "0x9af6a42a78Fe4Ec3c7eFDFF3a2D52ecb5aad0d47"
+      ],
+      "block": 123653440,
+      "codeHash": "0xa6743b2eadfc680678a14724cc0edb6fd7f35e3dd5306596dc79eb777ab81302"
+    }
+  },
+  "transactions": {
+    "deployLumoriaToken": {
+      "hash": "0xb9c5ff138dd755e08d36f4703405e66fc7a6e45536df8d818f02932cea58a741",
+      "blockNumber": 123653437,
+      "gasUsed": 1601400,
+      "contractAddress": "0xab1F77FE3504FE0d716a704061319bCa69977b26"
+    },
+    "deployTaxHandler": {
+      "hash": "0xf1324e2e34e403125e73db3b03028293ebb63fde109a247c4eef467e4cd6c816",
+      "blockNumber": 123653438,
+      "gasUsed": 3257032,
+      "contractAddress": "0x1BC9bf51a0b8850d1dC25a3d4d5Cd18A6fb55f75"
+    },
+    "deployRebateContract": {
+      "hash": "0xaa0679ba8d2efccd7669fa68a0c3d40b26b1dd28b335b2a9ce77063e49365bbd",
+      "blockNumber": 123653439,
+      "gasUsed": 1322897,
+      "contractAddress": "0xF3229A09FAb53834a5695FF03a5E8701C6580eB0"
+    },
+    "deployGenerator": {
+      "hash": "0x240cd8fdb8ebafdaf6f67478575bb86814a30ba2d482f3ab9ee8812962e3d8bc",
+      "blockNumber": 123653440,
+      "gasUsed": 2125973,
+      "contractAddress": "0x67C1Eef556D0789a0e24893022a0E61b611a2Da2"
+    },
+    "preserveTickBounds": {
+      "hash": "0x237dec62a20ca0ea10505ec85b594b01a8ad482e253e8f40155ecfc445f4f411",
+      "blockNumber": 123653441,
+      "gasUsed": 32534,
+      "contractAddress": null
+    },
+    "authorizeHook": {
+      "hash": "0x5abf38d05a4356112f2d87390e417c45a3363f0bc33394ea3664b9e9eda132bd",
+      "blockNumber": 123653442,
+      "gasUsed": 47658,
+      "contractAddress": null
+    },
+    "pauseLaunches": {
+      "hash": "0x1c595e68a209fba9978bf3e53254e1c448758b8d4b5b64b27c9e7c28754d1f4b",
+      "blockNumber": 123653443,
+      "gasUsed": 25579,
+      "contractAddress": null
+    },
+    "setTokenMasterCopy": {
+      "hash": "0x97af56470818390a77698fac125dd1a80dff43303fe85b4f12f5c464eba17a8b",
+      "blockNumber": 123653444,
+      "gasUsed": 30448,
+      "contractAddress": null
+    },
+    "setTaxHandlerMasterCopy": {
+      "hash": "0x4cc7de450652d93671ead59f962c2eb6308feef8558e88bc50f57196b8b72a1f",
+      "blockNumber": 123653445,
+      "gasUsed": 31196,
+      "contractAddress": null
+    },
+    "setRebateContract": {
+      "hash": "0x2d6c0367e51a3da5d1318967c62d12cb4e66ec03fb16473c2f0c1cb7bd005ec1",
+      "blockNumber": 123653446,
+      "gasUsed": 31408,
+      "contractAddress": null
+    },
+    "activateGenerator": {
+      "hash": "0x5c5e6d60b9acbeecefd1eeb37b92f5973084b7816f7326e4b26921de592249c1",
+      "blockNumber": 123653447,
+      "gasUsed": 47719,
+      "contractAddress": null
+    },
+    "smokeLaunch": {
+      "hash": "0x5b2749b6c5bf645d67e72784b3f3301fa727666d094ffd6948a437ca612174d3",
+      "blockNumber": 123653448,
+      "gasUsed": 1460513,
+      "contractAddress": null
+    },
+    "smokeGuardBuy": {
+      "hash": "0x0d5a0ddf763319cf5b7c2d3d22a7449b51ea6b0eb6d7d3e103617129800c3861",
+      "blockNumber": 123653449,
+      "gasUsed": 463044,
+      "contractAddress": null
+    },
+    "smokeApproveRebate": {
+      "hash": "0x0758cf9223e4261c82c3da28b20e3b89064a1047ce9a1a3036cf9c3d9fb12970",
+      "blockNumber": 123653450,
+      "gasUsed": 48683,
+      "contractAddress": null
+    },
+    "smokeFundRebate": {
+      "hash": "0xffbf85835e56d3b34caf5520ee5957dd54dd4ddfbb885276dc1bf5db2ef6cec8",
+      "blockNumber": 123653451,
+      "gasUsed": 195313,
+      "contractAddress": null
+    },
+    "smokePausedRebateBuy": {
+      "hash": "0xa14626c1cde8cf47a3eac42cbc46ed67f555cf32d86dff17c6c3d0d00f9b441d",
+      "blockNumber": 123653452,
+      "gasUsed": 304795,
+      "contractAddress": null
+    },
+    "smokeZeroTransfer": {
+      "hash": "0xb79261d2bcb71d517257a1c0277982bb863fcf1f3693b4e2c9ad433402b0c310",
+      "blockNumber": 123653453,
+      "gasUsed": 26784,
+      "contractAddress": null
+    },
+    "smokeNormalBuy": {
+      "hash": "0xc8bed0adc619a9228c259ef45d4133828c431445bd95062024ff194609cd1cd0",
+      "blockNumber": 123653455,
+      "gasUsed": 309523,
+      "contractAddress": null
+    },
+    "smokeLowerFee": {
+      "hash": "0x1a5019478cc5913485af6a82bca794cad90da1550ff1a7b7ab494dca967c91bb",
+      "blockNumber": 123653456,
+      "gasUsed": 42950,
+      "contractAddress": null
+    },
+    "smokeApproveSell": {
+      "hash": "0x6f499566cfa9abc2a35664ef34400e133435f08259fe02b1b8709f1b760f7a37",
+      "blockNumber": 123653457,
+      "gasUsed": 48683,
+      "contractAddress": null
+    },
+    "smokeSell": {
+      "hash": "0x8b156269c81b5a8bdb554319e453cbc38574664bd149ffb813aa5b7d6f65d2ef",
+      "blockNumber": 123653458,
+      "gasUsed": 294269,
+      "contractAddress": null
+    }
+  },
+  "retiredTestTokens": [
+    "0xd22E404B57EA8Df3Fa14DaeD18ED26aeA8D65D37",
+    "0x6C9f1746BBF1cf91db72341D615dA75e1900041a",
+    "0xE109A630cef96AF7aC6a2D68B066c9A95ed69c49",
+    "0x2418fd099953af530beC228693C2057A97780156",
+    "0x54e384a2c3A24d92f5422F3BF0B00e13c95C39cF",
+    "0x9A40ed9708CB1616Fe9DDE1D4849f7476576811A"
+  ],
+  "sourceHashes": {
+    "LumoriaToken": "0x3342a9e3ef9180932b61d94f262067287c09b729faa7cb75d7776ff06690a10a",
+    "TaxHandler": "0xdb9640b6c3f19b0d0f88ea0a843c94547e8eaa64bb46928b139bc95596e352a5",
+    "RebateContract": "0xc66b5278c51ec0c76858ee298d0c3bfcbd26728a2759f6322f3a375309f479f3",
+    "Generator": "0x08e156b713fcd68605b9701869b12e699d8912cf0d7767a01e9bd210469d5f0a"
+  },
+  "inventoryBlock": 123653436,
+  "tickBounds": [
+    "148200",
+    "196260"
+  ],
+  "activatedAt": "2026-09-23T23:32:22.143Z",
+  "smoke": {
+    "salt": "0x8f76d990766f850e4ffff2a086715340331c30944b649f510944605b01b944e1",
+    "token": "0x90BDB8E0011537F58A5BB9602ddb2575c42a0816",
+    "end": "1790206717",
+    "passedAt": "2026-09-23T23:32:27.751Z"
+  },
+  "smokePassed": true
+}

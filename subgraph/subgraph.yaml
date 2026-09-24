@@ -1,9 +1,49 @@
 specVersion: 1.0.0
+features:
+  - grafting
 description: Lumoria — curated launchpad on Uniswap V4 (LumoriaHook pool-level
   BNB taxes) on BNB Chain.
 schema:
   file: ./schema.graphql
 dataSources:
+  - kind: ethereum
+    name: GeneratorLaunchProtection
+    network: bsc
+    source:
+      abi: Generator
+      address: "0x67C1Eef556D0789a0e24893022a0E61b611a2Da2"
+      startBlock: 123653662
+    mapping:
+      kind: ethereum/events
+      apiVersion: 0.0.9
+      language: wasm/assemblyscript
+      file: ./src/generator.ts
+      entities:
+        - Token
+        - Raise
+        - SingleSidedLaunch
+        - TokenAllocation
+        - VestingSchedule
+      abis:
+        - name: Generator
+          file: ./abis/Generator.json
+        - name: FlatCurve
+          file: ./abis/FlatCurve.json
+      eventHandlers:
+        - event: ProjectGenerated(indexed address,indexed address,indexed
+            address,string,string,uint256,uint256,uint8)
+          handler: handleProjectGenerated
+        - event: TokenMetadataInitialized(indexed address,string,string,string)
+          handler: handleTokenMetadataInitialized
+        - event: FlatCurveLaunched(indexed address,indexed address,uint256)
+          handler: handleFlatCurveLaunched
+        - event: SingleSidedLaunched(indexed address,int24,uint160,uint256,uint128)
+          handler: handleSingleSidedLaunched
+        - event: AllocationMinted(indexed address,indexed address,uint256)
+          handler: handleAllocationMinted
+        - event: AllocationVested(indexed address,indexed address,indexed
+            uint256,uint256,uint64,uint64)
+          handler: handleAllocationVested
   - kind: ethereum
     name: GeneratorV2
     network: bsc
@@ -238,7 +278,7 @@ dataSources:
     network: bsc
     source:
       abi: RebateContract
-      address: "0x7fFfDbdD4eD1b6D635Fe66a73862d80b37b02718"
+      address: "0xF3229A09FAb53834a5695FF03a5E8701C6580eB0"
       startBlock: 111199483
     mapping:
       kind: ethereum/events
@@ -336,6 +376,7 @@ templates:
         - ModuleEvent
         - FeeChange
         - PendingChange
+        - SniperOverage
       abis:
         - name: TaxHandler
           file: ./abis/TaxHandler.json
@@ -346,6 +387,10 @@ templates:
       eventHandlers:
         - event: FeesUpdated(uint256,uint256,uint256,uint256)
           handler: handleFeesUpdated
+        - event: SniperGuardStarted(uint256,uint256,uint256)
+          handler: handleSniperGuardStarted
+        - event: SniperOverageDistributed(uint256,uint256,uint256)
+          handler: handleSniperOverageDistributed
         - event: FeeChangeProposed(uint256,uint256,uint256)
           handler: handleFeeChangeProposed
         - event: FeeChangeCancelled()

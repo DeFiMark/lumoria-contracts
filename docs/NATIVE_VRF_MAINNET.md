@@ -64,9 +64,11 @@ locally. Deploy the updated frontend/operator builds to publish those changes;
 this contract rollout does not itself deploy either service. Old operator
 builds correctly stop on a randomness-provider address mismatch.
 
-The separate sniper-guard, rebate, Token and TaxHandler changes remain local;
-this rollout activates the VRF adapter and PrizePool master only. Existing
-hook, router, vault, pool IDs and token implementations remain in place.
+This September 16 rollout activated the VRF adapter and PrizePool master only.
+The separate sniper-guard, rebate, Token and TaxHandler rollout was activated
+on September 23; see LAUNCH_PROTECTION_ROLLOUT.md. Existing hook, router, vault
+and VRF configuration remain in place. The reserve was rechecked at
+0.10597535456 BNB before that rollout.
 
 ## Operations
 

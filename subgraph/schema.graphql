@@ -30,6 +30,9 @@ type Token @entity {
   launchedAt: BigInt!
   launchTx: Bytes!
   buyFee: BigInt! # current (FeesUpdated)
+  sniperGuardStart: BigInt
+  sniperGuardEnd: BigInt
+  sniperGuardBaseBuyFee: BigInt
   sellFee: BigInt!
   renounced: Boolean! # true after ManagementRenounced (B6)
   renouncedAt: BigInt # timestamp of renounce (null until then)
@@ -55,6 +58,18 @@ type Token @entity {
   moduleHistory: [ModuleEvent!]! @derivedFrom(field: "token")
   allocations: [TokenAllocation!]! @derivedFrom(field: "token")
   vestingSchedules: [VestingSchedule!]! @derivedFrom(field: "token")
+}
+
+# Exact BNB accounting for the temporary launch fee overage. Live effective fees
+# come from chain time, not indexer polling or this immutable history.
+type SniperOverage @entity(immutable: true) {
+  id: ID!
+  token: Token!
+  totalTax: BigInt!
+  protocolAmount: BigInt!
+  projectAmount: BigInt!
+  timestamp: BigInt!
+  transactionHash: Bytes!
 }
 
 # Permanent single-sided V4 launch facts. The token address is the stable id,

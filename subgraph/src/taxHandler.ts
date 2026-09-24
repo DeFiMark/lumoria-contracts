@@ -10,6 +10,8 @@ import {
   ModuleRebalanceProposed,
   ModuleChangeCancelled,
   ManagementRenounced,
+  SniperGuardStarted,
+  SniperOverageDistributed,
 } from "../generated/templates/TaxHandler/TaxHandler";
 import { RewardModule } from "../generated/templates/TaxHandler/RewardModule";
 import {
@@ -28,6 +30,7 @@ import {
   ModuleEvent,
   FeeChange,
   PendingChange,
+  SniperOverage,
 } from "../generated/schema";
 import {
   ZERO_BI,
@@ -48,6 +51,27 @@ function ctxTokenId(): string {
 
 function ctxTaxHandler(): Address {
   return Address.fromString(dataSource.context().getString("taxHandler"));
+}
+
+export function handleSniperGuardStarted(event: SniperGuardStarted): void {
+  let token = Token.load(ctxTokenId());
+  if (token == null) return;
+  token.sniperGuardStart = event.params.start;
+  token.sniperGuardEnd = event.params.end;
+  token.sniperGuardBaseBuyFee = event.params.baseBuyFee;
+  token.buyFee = event.params.baseBuyFee;
+  token.save();
+}
+
+export function handleSniperOverageDistributed(event: SniperOverageDistributed): void {
+  let row = new SniperOverage(eventId(event));
+  row.token = ctxTokenId();
+  row.totalTax = event.params.totalTax;
+  row.protocolAmount = event.params.protocolAmount;
+  row.projectAmount = event.params.projectAmount;
+  row.timestamp = event.block.timestamp;
+  row.transactionHash = event.transaction.hash;
+  row.save();
 }
 
 // ─── Fees ───────────────────────────────────────────────────────────
