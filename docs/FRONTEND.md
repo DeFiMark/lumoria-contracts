@@ -280,6 +280,7 @@ Dividend distribution. Two modes: BNB (`rewardToken = address(0)`) or arbitrary 
 - `processRewards()` — **permissionless, always.** BNB mode only. Pure bookkeeping: crystallizes accrued BNB into the dividend accumulator. No swap, no params. Safe to expose as a "refresh rewards" button. Reverts in token mode.
 - `convertAndDistribute(minRewardOut, deadline)` — **operator-gated**, public 1h after `lastDistributionTime`. Token mode only. Swaps accrued BNB into `rewardToken` on the external router; `minRewardOut` MUST be > 0 and should be quoted off-chain. Reverts in BNB mode. See `FRONTEND_MIGRATION_V2.md` §2.
 - `claimReward()` — user claims their unpaid.
+- `pushRewards(holders[], minPayout)` — **permissionless auto-claim** (v2 master copy onward; absent on older clones). Pays each listed holder owed ≥ `minPayout` directly. The platform keeper calls it hourly for holders owed ≥ 0.006 BNB (or its reward-token equivalent) — the UI never needs to. DESIGN §6.1a.
 - `setShare(holder, amount)` — TaxHandler only.
 
 **Events:**
@@ -287,11 +288,13 @@ Dividend distribution. Two modes: BNB (`rewardToken = address(0)`) or arbitrary 
 |---|---|---|
 | `TaxReceived(amount)` | Tax delivered from TaxHandler | Tax-inflow chart per module |
 | `DividendsDistributed(rewardAmount, bnbSpent)` | A distribution round crystallizes (auto in receiveTax; or `processRewards` / `convertAndDistribute`) | Distribution cadence chart; for token-mode, `bnbSpent - rewardAmount` is the swap slippage |
-| `RewardClaimed(holder, amount)` | User claims | Per-user earnings tally |
+| `RewardClaimed(holder, amount)` | User claims **or** keeper auto-pays (`pushRewards`) | Per-user earnings tally — already indexed, so auto-payouts need no subgraph change. Distinguish by tx sender if ever needed |
+| `RewardsPushed(caller, holdersPaid, amountPaid)` | One `pushRewards` batch | Optional: auto-claim activity |
+| `RewardPushFailed(holder, amount)` | A push to a holder failed (contract that rejects BNB, etc.) | Optional: the amount stays claimable |
 | `ShareUpdated(holder, oldShare, newShare)` | Mirror of TaxHandler's `ShareUpdated` | Can be ignored if TaxHandler's event is already indexed |
 
 **UI surfaces:**
-- **Holder page** ("My rewards"): per-token claimable balance — `getUnpaidRewards(msg.sender)` direct read. Claim button → `claimReward()` write. Historical claims → subgraph.
+- **Holder page** ("My rewards"): per-token claimable balance — `getUnpaidRewards(msg.sender)` direct read. Claim button → `claimReward()` write. Historical claims → subgraph. UI copy: "Distributed automatically above 0.006 BNB".
 - **Token info panel**: "Lifetime rewards distributed" / "Reward token" / "Min distribution threshold".
 - **Keeper incentive**: optional `processRewards` button for anyone (BNB mode). Token mode needs `convertAndDistribute` with a quoted `minRewardOut` and is operator-gated.
 

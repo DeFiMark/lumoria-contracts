@@ -30,6 +30,12 @@ pragma solidity 0.8.28;
     reference can ever exist for it. It is gated on the platform operator registry
     in the Database. See §6.2 and §6.3.
 
+    Payout is pull (`claimReward`) OR push (`pushRewards`). Push is a plain
+    transfer of already-crystallized rewards to the holder they belong to — no
+    swap, no price, nothing to sandwich — so it is PERMISSIONLESS. The platform
+    keeper calls it on a cadence with a minimum payout so dust is never pushed;
+    anything below the minimum simply stays claimable.
+
     Cloned via ERC-1167 proxy per-token.
  */
 
@@ -51,6 +57,13 @@ contract RewardModule is IRewardModule, ReentrancyGuard {
     ///      goes away, while normally reserving execution for the party that
     ///      computes a sane `minRewardOut` off-chain.
     uint256 internal constant PUBLIC_FALLBACK_DELAY = 1 hours;
+
+    /// @dev Gas forwarded to each push recipient. A holder contract that burns
+    ///      gas in `receive()` (or a reward token with expensive hooks) can then
+    ///      waste at most this much of a batch — it can never make the whole
+    ///      batch run out of gas. Covers EOAs and Safe-style proxies with room.
+    uint256 internal constant PUSH_GAS_BNB = 30_000;
+    uint256 internal constant PUSH_GAS_TOKEN = 150_000;
 
     // core references
     address public taxHandler;
@@ -86,6 +99,10 @@ contract RewardModule is IRewardModule, ReentrancyGuard {
     event ShareUpdated(address indexed holder, uint256 oldShare, uint256 newShare);
     event Donated(address indexed from, uint256 amount);
     event SharesSynced(uint256 holderCount);
+    /// @dev Per-holder pushes ALSO emit `RewardClaimed(holder, amount)`, so every
+    ///      payout — pulled or pushed — is indexed by the same handler.
+    event RewardsPushed(address indexed caller, uint256 holdersPaid, uint256 amountPaid);
+    event RewardPushFailed(address indexed holder, uint256 amount);
 
     // ─── Initialization ─────────────────────────────────────────────
 
@@ -334,6 +351,76 @@ contract RewardModule is IRewardModule, ReentrancyGuard {
         }
 
         emit RewardClaimed(msg.sender, unpaid);
+    }
+
+    /// @notice PERMISSIONLESS. Pay each listed holder their unpaid rewards, for
+    ///         holders owed at least `minPayout` (in reward units: wei of BNB, or
+    ///         rewardToken units). Holders below the minimum are skipped and
+    ///         remain free to `claimReward()` at any time.
+    ///
+    ///         Safe to open to anyone: funds only ever move to the holder they
+    ///         are owed to, in an amount the contract computes itself, so a bogus
+    ///         list or a zero minimum can at worst spend the caller's own gas.
+    ///
+    /// @dev Never reverts on a bad recipient. Each transfer gets a fixed gas
+    ///      budget and copies at most 32 bytes of return data; on failure the
+    ///      holder's bookkeeping is restored (still claimable) and
+    ///      `RewardPushFailed` is emitted so the keeper can stop retrying them.
+    function pushRewards(address[] calldata holders, uint256 minPayout)
+        external
+        override
+        nonReentrant
+        returns (uint256 holdersPaid, uint256 amountPaid)
+    {
+        bool bnbMode = rewardToken == address(0);
+        uint256 len = holders.length;
+        for (uint256 i = 0; i < len; i++) {
+            address holder = holders[i];
+            if (holder == address(0)) continue;
+
+            _crystallize(holder);
+            uint256 credited = creditedDividends[holder];
+            uint256 withdrawn = withdrawnDividends[holder];
+            if (credited <= withdrawn) continue;
+            uint256 unpaid = credited - withdrawn;
+            if (unpaid < minPayout) continue;
+
+            // Effects before the interaction; rolled back below on failure.
+            withdrawnDividends[holder] = credited;
+
+            bool ok = bnbMode ? _pushBNB(holder, unpaid) : _pushToken(holder, unpaid);
+            if (!ok) {
+                withdrawnDividends[holder] = withdrawn;
+                emit RewardPushFailed(holder, unpaid);
+                continue;
+            }
+
+            holdersPaid++;
+            amountPaid += unpaid;
+            emit RewardClaimed(holder, unpaid);
+        }
+
+        totalDividendsWithdrawn += amountPaid;
+        emit RewardsPushed(msg.sender, holdersPaid, amountPaid);
+    }
+
+    function _pushBNB(address to, uint256 amount) internal returns (bool ok) {
+        uint256 g = PUSH_GAS_BNB;
+        assembly {
+            ok := call(g, to, amount, 0, 0, 0, 0) // no return-data copy
+        }
+    }
+
+    function _pushToken(address to, uint256 amount) internal returns (bool ok) {
+        address t = rewardToken;
+        uint256 g = PUSH_GAS_TOKEN;
+        bytes memory data = abi.encodeWithSelector(0xa9059cbb, to, amount);
+        assembly {
+            // Copy at most one word back: guards against return-data bombs.
+            let success := call(g, t, 0, add(data, 0x20), mload(data), 0, 0x20)
+            let rs := returndatasize()
+            ok := and(success, or(iszero(rs), and(gt(rs, 31), eq(mload(0), 1))))
+        }
     }
 
     // ─── Admin ──────────────────────────────────────────────────────

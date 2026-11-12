@@ -49,4 +49,12 @@ interface IRewardModule is IModule {
     ///         and self-verifying — it reads `balanceOf` directly, so a bogus
     ///         holder list cannot inflate anyone's share.
     function sync(address[] calldata holders) external;
+
+    /// @notice Permissionlessly push unpaid rewards to each listed holder owed
+    ///         at least `minPayout`. No swap, no price — funds only move to the
+    ///         holder they are owed to. Failed transfers leave the reward
+    ///         claimable. Emits `RewardClaimed` per holder paid.
+    function pushRewards(address[] calldata holders, uint256 minPayout)
+        external
+        returns (uint256 holdersPaid, uint256 amountPaid);
 }

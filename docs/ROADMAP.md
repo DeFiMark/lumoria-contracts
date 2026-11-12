@@ -241,6 +241,13 @@ UI gap, so it belongs on chain. Full spec in **DESIGN §12.2**.
 No production deployment, Database rotation, Goldsky deployment, or frontend
 production enablement is part of the implementation worktree.
 
+## Auto-claim — RewardModule v2 (2026-11)
+
+- ✅ `RewardModule.pushRewards(holders, minPayout)` — permissionless push payout, gas-capped per recipient, failures stay claimable (DESIGN §6.1a). 12 RewardModule tests green.
+- ✅ Operator keeper: auto-claim pass (≥ 0.006 BNB, hourly, largest first, batches of 100; platform pays gas) + a fixed 5% slippage floor for token-mode conversion.
+- ✅ Deployed RewardModule master copy `0xB38c7feCD7a9cF8A5c98Eb36BB60646b18F15Ef8` (BscScan-verified) and rotated `Database.setModuleMasterCopy(0, …)` — `scripts/redeploy-reward-mc.js`. Affects NEW launches only; the v1 copy is kept as `masterCopies.rewardV1`.
+- ⬜ Frontend `npm run abis` + "auto-paid ≥ 0.006 BNB" copy on the rewards page.
+
 ## Ongoing Tracks (every phase)
 
 These aren't phases themselves — they're disciplines that run alongside every phase.

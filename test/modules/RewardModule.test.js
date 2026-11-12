@@ -125,6 +125,114 @@ describe("RewardModule (BNB mode)", function () {
         const unpaidAfter = await rewardMod.getUnpaidRewards(user1.address);
         expect(unpaidAfter).to.equal(unpaidBefore);
     });
+
+    describe("pushRewards (auto-claim)", function () {
+        it("pays every listed holder at or above minPayout, permissionlessly", async function () {
+            const base = await loadFixture(deployBase);
+            const { owner, user1, user2, user3, keeper } = base.signers;
+            const { token, taxHandler, rewardMod } = await launchWithRewardOnly(base);
+
+            await token.connect(owner).transfer(user1.address, ethers.parseEther("1000"));
+            await token.connect(owner).transfer(user2.address, ethers.parseEther("3000"));
+            await taxHandler.receiveBuyTax({ value: ethers.parseEther("10") });
+
+            const u1 = await rewardMod.getUnpaidRewards(user1.address);
+            const u2 = await rewardMod.getUnpaidRewards(user2.address);
+            const b1 = await ethers.provider.getBalance(user1.address);
+            const b2 = await ethers.provider.getBalance(user2.address);
+
+            // keeper is NOT a registered operator — push needs no permission.
+            await expect(rewardMod.connect(keeper).pushRewards([user1.address, user2.address], 1n))
+                .to.emit(rewardMod, "RewardClaimed").withArgs(user1.address, u1)
+                .and.to.emit(rewardMod, "RewardClaimed").withArgs(user2.address, u2)
+                .and.to.emit(rewardMod, "RewardsPushed").withArgs(keeper.address, 2, u1 + u2);
+
+            expect(await ethers.provider.getBalance(user1.address) - b1).to.equal(u1);
+            expect(await ethers.provider.getBalance(user2.address) - b2).to.equal(u2);
+            expect(await rewardMod.getUnpaidRewards(user1.address)).to.equal(0);
+            expect(await rewardMod.totalDividendsWithdrawn()).to.equal(u1 + u2);
+
+            // Nothing left to push — a second pass (incl. duplicates / a zero-share
+            // address / address(0)) is a no-op rather than a revert.
+            await expect(rewardMod.pushRewards(
+                [user1.address, user1.address, user3.address, ethers.ZeroAddress], 0n,
+            )).to.emit(rewardMod, "RewardsPushed").withArgs(owner.address, 0, 0);
+        });
+
+        it("skips holders below minPayout; they can still claim", async function () {
+            const base = await loadFixture(deployBase);
+            const { owner, user1, user2 } = base.signers;
+            const { token, taxHandler, rewardMod } = await launchWithRewardOnly(base);
+
+            await token.connect(owner).transfer(user1.address, ethers.parseEther("1000"));
+            await token.connect(owner).transfer(user2.address, ethers.parseEther("3000"));
+            await taxHandler.receiveBuyTax({ value: ethers.parseEther("10") });
+
+            const u1 = await rewardMod.getUnpaidRewards(user1.address);
+            const u2 = await rewardMod.getUnpaidRewards(user2.address);
+            expect(u2).to.be.gt(u1);
+
+            await rewardMod.pushRewards([user1.address, user2.address], u2); // only user2 qualifies
+            expect(await rewardMod.getUnpaidRewards(user1.address)).to.equal(u1);
+            expect(await rewardMod.getUnpaidRewards(user2.address)).to.equal(0);
+
+            await expect(rewardMod.connect(user1).claimReward())
+                .to.emit(rewardMod, "RewardClaimed").withArgs(user1.address, u1);
+            await expect(rewardMod.connect(user2).claimReward()).to.be.revertedWith("Nothing to claim");
+        });
+
+        it("a rejecting or gas-burning holder cannot break the batch and stays claimable", async function () {
+            const base = await loadFixture(deployBase);
+            const { owner, user1 } = base.signers;
+            const { token, taxHandler, rewardMod } = await launchWithRewardOnly(base);
+
+            const rejecting = await (await ethers.getContractFactory("RejectingRecipient")).deploy();
+            const burner = await (await ethers.getContractFactory("GasBurningRecipient")).deploy();
+            const rejAddr = await rejecting.getAddress();
+            const burnAddr = await burner.getAddress();
+
+            for (const a of [rejAddr, burnAddr, user1.address]) {
+                await token.connect(owner).transfer(a, ethers.parseEther("1000"));
+            }
+            await taxHandler.receiveBuyTax({ value: ethers.parseEther("10") });
+
+            const uRej = await rewardMod.getUnpaidRewards(rejAddr);
+            const uBurn = await rewardMod.getUnpaidRewards(burnAddr);
+            const u1 = await rewardMod.getUnpaidRewards(user1.address);
+
+            const tx = rewardMod.pushRewards([rejAddr, burnAddr, user1.address], 1n, { gasLimit: 500_000 });
+            await expect(tx)
+                .to.emit(rewardMod, "RewardPushFailed").withArgs(rejAddr, uRej)
+                .and.to.emit(rewardMod, "RewardPushFailed").withArgs(burnAddr, uBurn)
+                .and.to.emit(rewardMod, "RewardClaimed").withArgs(user1.address, u1)
+                .and.to.emit(rewardMod, "RewardsPushed").withArgs(owner.address, 1, u1);
+
+            // Failed holders keep their full entitlement.
+            expect(await rewardMod.getUnpaidRewards(rejAddr)).to.equal(uRej);
+            expect(await rewardMod.getUnpaidRewards(burnAddr)).to.equal(uBurn);
+            expect(await rewardMod.totalDividendsWithdrawn()).to.equal(u1);
+        });
+
+        it("push and claim draw on the same balance (no double pay)", async function () {
+            const base = await loadFixture(deployBase);
+            const { owner, user1 } = base.signers;
+            const { token, taxHandler, rewardMod } = await launchWithRewardOnly(base);
+
+            await token.connect(owner).transfer(user1.address, ethers.parseEther("1000"));
+            await taxHandler.receiveBuyTax({ value: ethers.parseEther("1") });
+            await rewardMod.connect(user1).claimReward();
+
+            await expect(rewardMod.pushRewards([user1.address], 0n))
+                .to.emit(rewardMod, "RewardsPushed").withArgs(owner.address, 0, 0);
+
+            // New rewards after the claim are pushable.
+            await taxHandler.receiveBuyTax({ value: ethers.parseEther("1") });
+            const u1 = await rewardMod.getUnpaidRewards(user1.address);
+            expect(u1).to.be.gt(0);
+            await expect(rewardMod.pushRewards([user1.address], 0n))
+                .to.emit(rewardMod, "RewardClaimed").withArgs(user1.address, u1);
+        });
+    });
 });
 
 describe("RewardModule (token mode)", function () {
@@ -235,5 +343,24 @@ describe("RewardModule (token mode)", function () {
         await taxHandler.receiveBuyTax({ value: ethers.parseEther("0.01") });
         await rewardMod.convertAndDistribute(1n, await farDeadline());
         expect(await rewardMod.totalDividendsDistributed()).to.be.gt(0);
+    });
+
+    it("pushRewards pays converted reward tokens to holders", async function () {
+        const base = await loadFixture(deployBase);
+        const { token, taxHandler, rewardMod, rewardToken } = await launchRewardedToken(base);
+        const { owner, user1, keeper } = base.signers;
+
+        await token.connect(owner).transfer(user1.address, ethers.parseEther("1000"));
+        await taxHandler.receiveBuyTax({ value: ethers.parseEther("1") });
+        await rewardMod.convertAndDistribute(1n, await farDeadline());
+
+        const unpaid = await rewardMod.getUnpaidRewards(user1.address);
+        expect(unpaid).to.be.gt(0);
+        const before = await rewardToken.balanceOf(user1.address);
+
+        await expect(rewardMod.connect(keeper).pushRewards([user1.address], 1n))
+            .to.emit(rewardMod, "RewardClaimed").withArgs(user1.address, unpaid);
+        expect(await rewardToken.balanceOf(user1.address) - before).to.equal(unpaid);
+        expect(await rewardMod.getUnpaidRewards(user1.address)).to.equal(0);
     });
 });

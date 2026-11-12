@@ -670,14 +670,42 @@ Flow:
 1. Receives BNB from TaxHandler via receiveTax()
 2. Swaps BNB → rewardToken via DEX (can use PancakeSwap or external router)
 3. Increases dividendsPerShare proportionally
-4. Holders call claimReward() to withdraw their share
+4. Holders call claimReward() to withdraw their share — OR the platform keeper
+   pushes it to them via pushRewards(holders, minPayout) (auto-claim, §6.1a)
 5. Shares updated via setShare() called by TaxHandler
 
 Events:
 - RewardDeposited(token, amount)
-- RewardClaimed(holder, amount)
+- RewardClaimed(holder, amount)            (pulled OR pushed)
+- RewardsPushed(caller, holdersPaid, amountPaid)
+- RewardPushFailed(holder, amount)
 - ShareUpdated(holder, oldShare, newShare)
 ```
+
+#### 6.1a Auto-claim — `pushRewards` (RewardModule v2 master copy, 2026-11)
+
+Rewards are paid **pull or push**. `pushRewards(address[] holders, uint256 minPayout)`
+pays each listed holder their unpaid rewards when they are owed ≥ `minPayout`
+(reward units). It is **permissionless**: it is a plain transfer of rewards
+already crystallized into the accumulator — no swap, no price, nothing to
+sandwich — and funds only ever move to the holder they are owed to, in an
+amount the contract computes. A bogus list or a zero minimum can only waste the
+caller's gas. The only MEV-relevant step remains the token-mode conversion
+(`convertAndDistribute`, operator-gated with a quoted floor).
+
+- **Never reverts on a bad recipient.** Each transfer gets a fixed gas budget
+  (`PUSH_GAS_BNB = 30k`, `PUSH_GAS_TOKEN = 150k`) and copies ≤ 32 bytes of
+  return data, so a holder contract that rejects BNB, burns gas or return-bombs
+  cannot make the batch fail. On failure the holder's bookkeeping is restored
+  (still claimable) and `RewardPushFailed` fires.
+- **Same balance as `claimReward`** — push and pull both advance
+  `withdrawnDividends`, so there is no double-pay path.
+- **Keeper policy (off-chain, tunable):** the platform keeper pushes every holder
+  owed ≥ 0.006 BNB (fixed in the operator config; token mode prices that
+  minimum through the module's external router), hourly, largest first, in
+  batches. The platform pays the gas. Holders below the minimum claim manually.
+- **Scope:** new master copy only. Clones are frozen, so tokens launched before
+  the rotation stay claim-only (they were all pre-launch test tokens).
 
 ### 6.2 BurnModule
 **Purpose**: Uses collected BNB to buy back tokens from the DEX and burn them.
@@ -826,6 +854,8 @@ interface IRewardModule is IModule {
     function getUnpaidRewards(address holder) external view returns (uint256);
     function donate() external payable;                    // permissionless top-up (V2 §4.1)
     function sync(address[] calldata holders) external;    // post-launch backfill (V2 §4.2)
+    function pushRewards(address[] calldata holders, uint256 minPayout)  // auto-claim (§6.1a)
+        external returns (uint256 holdersPaid, uint256 amountPaid);
 }
 ```
 
